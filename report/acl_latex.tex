@@ -1,0 +1,158 @@
+\documentclass[11pt]{article}
+
+% Change "review" to "final" to generate the final (sometimes called camera-ready) version.
+% Change to "preprint" to generate a non-anonymous version with page numbers.
+\usepackage[preprint]{acl}
+
+% Standard package includes
+\usepackage{times}
+\usepackage{latexsym}
+
+% For proper rendering and hyphenation of words containing Latin characters (including in bib files)
+\usepackage[T1]{fontenc}
+% For Vietnamese characters
+% \usepackage[T5]{fontenc}
+% See https://www.latex-project.org/help/documentation/encguide.pdf for other character sets
+
+% This assumes your files are encoded as UTF8
+\usepackage[utf8]{inputenc}
+
+% This is not strictly necessary, and may be commented out,
+% but it will improve the layout of the manuscript,
+% and will typically save some space.
+\usepackage{microtype}
+
+% This is also not strictly necessary, and may be commented out.
+% However, it will improve the aesthetics of text in
+% the typewriter font.
+\usepackage{inconsolata}
+
+%Including images in your LaTeX document requires adding
+%additional package(s)
+\usepackage{graphicx}
+
+% If the title and author information does not fit in the area allocated, uncomment the following
+%
+%\setlength\titlebox{<dim>}
+%
+% and set <dim> to something 5cm or larger.
+
+\title{Fully Adaptive MoEUT}
+
+% Author information can be set in various styles:
+% For several authors from the same institution:
+% \author{Author 1 \and ... \and Author n \\
+%         Address line \\ ... \\ Address line}
+% if the names do not fit well on one line use
+%         Author 1 \\ {\bf Author 2} \\ ... \\ {\bf Author n} \\
+% For authors from different institutions:
+% \author{Author 1 \\ Address line \\  ... \\ Address line
+%         \And  ... \And
+%         Author n \\ Address line \\ ... \\ Address line}
+% To start a separate ``row'' of authors use \AND, as in
+% \author{Author 1 \\ Address line \\  ... \\ Address line
+%         \AND
+%         Author 2 \\ Address line \\ ... \\ Address line \And
+%         Author 3 \\ Address line \\ ... \\ Address line}
+
+\author{Adrian Boguszewski\\
+  University of Warsaw \\
+  \texttt{a.boguszews2@student.uw.edu.pl} \\\And
+  Marta Muskus \\
+  University of Warsaw \\
+  \texttt{m.muskus@student.uw.edu.pl}
+}
+
+
+% \author{
+%  \textbf{First Author\textsuperscript{1}},
+%  \textbf{Second Author\textsuperscript{1,2}},
+%  \textbf{Third T. Author\textsuperscript{1}},
+%  \textbf{Fourth Author\textsuperscript{1}},
+% \\
+%  \textbf{Fifth Author\textsuperscript{1,2}},
+%  \textbf{Sixth Author\textsuperscript{1}},
+%  \textbf{Seventh Author\textsuperscript{1}},
+%  \textbf{Eighth Author \textsuperscript{1,2,3,4}},
+% \\
+%  \textbf{Ninth Author\textsuperscript{1}},
+%  \textbf{Tenth Author\textsuperscript{1}},
+%  \textbf{Eleventh E. Author\textsuperscript{1,2,3,4,5}},
+%  \textbf{Twelfth Author\textsuperscript{1}},
+% \\
+%  \textbf{Thirteenth Author\textsuperscript{3}},
+%  \textbf{Fourteenth F. Author\textsuperscript{2,4}},
+%  \textbf{Fifteenth Author\textsuperscript{1}},
+%  \textbf{Sixteenth Author\textsuperscript{1}},
+% \\
+%  \textbf{Seventeenth S. Author\textsuperscript{4,5}},
+%  \textbf{Eighteenth Author\textsuperscript{3,4}},
+%  \textbf{Nineteenth N. Author\textsuperscript{2,5}},
+%  \textbf{Twentieth Author\textsuperscript{1}}
+% \\
+% \\
+%  \textsuperscript{1}Affiliation 1,
+%  \textsuperscript{2}Affiliation 2,
+%  \textsuperscript{3}Affiliation 3,
+%  \textsuperscript{4}Affiliation 4,
+%  \textsuperscript{5}Affiliation 5
+% \\
+%  \small{
+%    \textbf{Correspondence:} \href{mailto:email@domain}{email@domain}
+%  }
+% }
+
+\begin{document}
+\maketitle
+% \begin{abstract}
+% This document is a supplement to the general instructions for *ACL authors. It contains instructions for using the \LaTeX{} style files for ACL conferences.
+% The document itself conforms to its own specifications, and is therefore an example of what your manuscript should look like.
+% These instructions should be used both for papers submitted for review and for final versions of accepted papers.
+% \end{abstract}
+
+\section{Motivation and Context}
+
+Mixture-of-Experts Universal Transformer (MoEUT) \citep{csordas2024moeutmixtureofexpertsuniversaltransformers}  is an improvement of the Universal Transformer (UT) \citep{DBLP:journals/corr/abs-1807-03819} architecture. The idea behind UT is to introduce extreme weight sharing into the traditional transformer by repeatedly processing tokens with a single transformer block instead of having multiple single-use blocks. MoEUT tries to improve the efficiency of a basic UT, by introducing Mixture-of-Experts in the feedforward networks \citep{DBLP:journals/corr/ShazeerMMDLHD17} as well as the multihead attention mechanism \citep{csordas2024switchheadacceleratingtransformersmixtureofexperts}.
+
+
+We want to introduce Adaptive Compute Time (ACT) into the MoEUT architecture both at the token and loop level. MoEUT, as presented in the original paper, has a fixed number of loops where every loop processes every token. Every query gets the same amount of compute. The idea of ACT is that different queries require different amounts of compute e.g. we could get away with allocating less compute to easy queries and utilizing those savings for more difficult queries.
+
+
+In the case of UTs, ACT could mean adjusting the number of loops that the query goes through before producing an answer. This idea is explored in the LoopFormer \citep{jeddi2026loopformerelasticdepthloopedtransformers} and Sparse Universal Transformer \citep{tan2023sparseuniversaltransformer} papers. This is what we refer to as loop level ACT. Another approach would be to adjust the amount of tokens that are processed in each loop. This idea is explored in the Mixture-of-Recursions \citep{bae2025mixtureofrecursionslearningdynamicrecursive} paper and we refer to it as token level ACT.
+
+
+As far as we know the two approaches were never combined - papers mentioned above either fixed the number of loops and adjusted the number of tokens processed (token-level ACT) or fixed the number of tokens processed and adjusted the number of loops (loop-level ACT). We would like to see if implementing both of them within a MoEUT would result in compute savings without sacrificing the  quality of the model.
+
+
+\section{Action Plan}
+
+\begin{enumerate}
+    \item Choose two model parameter sizes (e.g. 244M, 728M), training dataset and training compute budget.
+    \item Train baseline models - standard dense transformer, standard MoEUT.
+    \item Choose the evaluation dataset and metrics (e.g. loss, perplexity, accuracy and FLOPs or MACs spent on inference).
+    \item Evaluate baseline models.
+    \item Design the Fully Adaptive MoEUT architecture that combines token-level and loop-level ACT.
+    \item Train and evaluate the Fully Adaptive MoEUT model.
+    \item Compare the models and report findings.
+\end{enumerate}
+
+\section{Datasets and Benchmarks}
+
+As a training dataset we plan on using the Colossal Clean Crawled Corpus (C4), as it is one of the three datasets utilized in the original MoEUT paper. The quality of our Fully Adaptive MoEUT will be evaluated using several metrics. We plan on testing its zero-shot performance on the LAMBADA dataset and possibly further on HellaSwag and ARC. We will also measure cross-entropy loss and perplexity, as well as check if our model can match performance baselines while using fewer MACs/FLOPs.
+
+\section{Success Criteria}
+
+Because of the exploratory nature of the proposed project we think it would be fair to consider the project successful in the following cases:
+
+\begin{itemize}
+    \item We attempt and fail to design a Fully Adaptive MoEUT, while delivering a detailed report on what we tried and how it did not work.
+    \item We successfully design and train a Fully Adaptive MoEUT, but it performs worse than the original MoEUT or standard dense transformer.
+    \item We successfully design and train a Fully Adaptive MoEUT that matches the baseline performance and saves compute.
+\end{itemize}
+
+% Bibliography entries for the entire Anthology, followed by custom entries
+%\bibliography{anthology,custom}
+% Custom bibliography entries only
+\bibliography{custom}        
+
+\end{document}
