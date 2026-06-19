@@ -78,9 +78,19 @@ def make_dataloader(
         pin_memory:  pin CPU tensors for faster GPU transfer
     """
     dataset = PackedC4Dataset(shard_dir, encode, eos_id, seq_len, shuffle=shuffle, seed=seed)
-    return DataLoader(
-        dataset,
+
+    # With an IterableDataset, each worker owns a disjoint subset of shards
+    # (round-robin in __iter__). More workers than shards leaves some idle, so
+    # cap it at the shard count.
+    num_workers = min(num_workers, len(dataset.shards))
+
+    kwargs = dict(
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory and torch.cuda.is_available(),
     )
+    if num_workers > 0:
+        # Keep workers alive across epochs (avoids respawn deadlocks on NFS) and
+        # fail loudly instead of hanging forever if a worker stalls.
+        kwargs.update(persistent_workers=True, prefetch_factor=2, timeout=120)
+    return DataLoader(dataset, **kwargs)
