@@ -115,22 +115,21 @@ class SwitchHeadCore(torch.nn.Module):
         return loss
 
     def forward(self, q_src: torch.Tensor, k_src: torch.Tensor, v_src: torch.Tensor, att_mask: Optional[AttentionMask],
-                active_mask: torch.Tensor | None = None, kv_cache: KVCache = None) -> Tuple[torch.Tensor, KVCache]:
-        pos_offset = q_src.shape[1] - k_src.shape[1]
-        assert pos_offset >= 0
-
+                active_mask: torch.Tensor | None = None, kv_cache: KVCache = None, loop_idx: int = 0) -> Tuple[torch.Tensor, KVCache]:
         scale = self.scale.sqrt()
 
         B, T, _ = q_src.shape
         out_dim = self.projection_size * self.n_heads
-        q = torch.zeros(B, T, out_dim, device=q_src.device, dtype=q_src.dtype)
         
+        q = torch.zeros(B, T, out_dim, device=q_src.device, dtype=q_src.dtype)
         if active_mask is not None and active_mask.any():
             q_active = self.q(q_src[active_mask])
             q[active_mask] = q_active
         q = q * scale.type_as(q)
 
-        k = self.k(k_src)
+        k = torch.zeros(B, T, out_dim, device=k_src.device, dtype=k_src.dtype)
+        if active_mask is not None and active_mask.any():
+            k[active_mask] = self.k(k_src[active_mask])
         k = k * scale.type_as(k)
 
         if self.n_experts > 1:
@@ -154,16 +153,38 @@ class SwitchHeadCore(torch.nn.Module):
         k = self.project_to_torch_order(k)
 
         if kv_cache is not None:
-            v = torch.cat([kv_cache["v"], v], dim=-2) if "v" in kv_cache else v
-            k = torch.cat([kv_cache["k"], k], dim=-2) if "k" in kv_cache else k
-            kv_cache = {
-                "v": v,
-                "k": k
-            }
+            if loop_idx == 0:
+                if "k" not in kv_cache:
+                    kv_cache["k"] = k
+                    kv_cache["v"] = v
+                    kv_cache["T_curr"] = k.shape[-2]
+                else:
+                    kv_cache["k"] = torch.cat([kv_cache["k"], k], dim=-2)
+                    kv_cache["v"] = torch.cat([kv_cache["v"], v], dim=-2)
+                    kv_cache["T_curr"] = k.shape[-2]
+            else:
+                T_curr = kv_cache.get("T_curr", k.shape[-2])
+                
+                if active_mask is not None and active_mask.any():
+                    b_mask = active_mask.view(B, 1, T_curr, 1)
+                    
+                    curr_k = kv_cache["k"][..., -T_curr:, :]
+                    curr_v = kv_cache["v"][..., -T_curr:, :]
+
+                    kv_cache["k"][..., -T_curr:, :] = torch.where(b_mask, k, curr_k)
+                    kv_cache["v"][..., -T_curr:, :] = torch.where(b_mask, v, curr_v)
+
+            k_att = kv_cache["k"]
+            v_att = kv_cache["v"]
+        else:
+            k_att = k
+            v_att = v
 
         q = self.dropout(q)
-        res = self.attend(pos_offset, v, k, q, self.get_mask_tensor(v.shape[-2], att_mask))
-        res = res.transpose(-2, -3) # Shape: [B, T, n_heads, d_head]
+        
+        pos_offset = k_att.shape[-2] - q.shape[-2]
+        res = self.attend(pos_offset, v_att, k_att, q, self.get_mask_tensor(v_att.shape[-2], att_mask))
+        res = res.transpose(-2, -3)
 
         if self.n_experts > 1:
             if active_mask is not None and active_mask.any():
