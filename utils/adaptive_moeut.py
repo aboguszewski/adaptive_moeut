@@ -2,12 +2,21 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple, Optional
 import math
+from dataclasses import dataclass
 
 from cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
 from moeut_code import (
     AttentionMask, MoEUTOutput, MultilayerKVCache, KVCache,
     entropy_reg, RotaryPosEncoding, SigmaMoE
 )
+
+@dataclass
+class AdaptiveMoEUTOutput:
+    outputs: torch.Tensor
+    reg_loss: torch.Tensor
+    cache: MultilayerKVCache
+    tokens_halted_at: torch.Tensor
+
 
 class SwitchHeadCore(torch.nn.Module):
     def __init__(self, state_size: int, n_heads: int, n_experts: int, dropout: float = 0.0,
@@ -325,11 +334,13 @@ class AdaptiveMoEUT(torch.nn.Module):
         token_batch_shape = (B, T, 1)
 
         expected_loops = torch.zeros((B, T), device=x.device, dtype=x.dtype)
+        tokens_halted_at = torch.zeros(self.max_loops, device=x.device, dtype=torch.int)
         
         accum_alpha = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
         weighted_prev_x = torch.zeros_like(x, device=x.device, dtype=x.dtype)
         
         s = x.clone()
+        old_active_mask = torch.zeros((B, T), device=x.device, dtype=torch.bool)
         active_mask = torch.ones((B, T), device=x.device, dtype=torch.bool)
         new_cache = kv_cache.copy() if kv_cache is not None else {}
 
@@ -352,13 +363,20 @@ class AdaptiveMoEUT(torch.nn.Module):
             
             expected_loops[active_mask] += alpha[active_mask].squeeze(-1) * (loop + 1)
 
+            old_active_mask = active_mask.clone()
             active_mask = (accum_alpha < halt_thresh).squeeze(-1)
+            
+            just_halted = old_active_mask & ~active_mask
+            tokens_halted_at[loop] = just_halted.sum()
 
             if not active_mask.any():
                 break
 
         remainder = 1.0 - accum_alpha.squeeze(-1)
         expected_loops += remainder * self.max_loops
+        
+        if active_mask.any():
+            tokens_halted_at[self.max_loops - 1] += active_mask.sum()
 
         reg_loss = expected_loops.mean()
         for layer in self.modules():
@@ -367,7 +385,7 @@ class AdaptiveMoEUT(torch.nn.Module):
             elif isinstance(layer, SwitchHeadCore):
                 reg_loss = reg_loss + self.att_entropy_reg * layer.get_reg_loss()
 
-        return MoEUTOutput(s, reg_loss, new_cache if kv_cache is not None else None)
+        return AdaptiveMoEUTOutput(s, reg_loss, new_cache, tokens_halted_at)
 
     @torch.no_grad
     def reset_parameters(self):
