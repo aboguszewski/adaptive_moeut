@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple, Optional, Dict
 import math
-from .cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
+from cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
 from dataclasses import dataclass
 
 
