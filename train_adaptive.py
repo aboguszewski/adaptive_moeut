@@ -67,6 +67,21 @@ DEBUG_TRAIN_CONFIG = TrainConfig(
     mixed_precision=torch.cuda.is_available(),
 )
 
+MICRO_TRAIN_CONFIG = TrainConfig(
+    seq_len=8,
+    batch_size=1,
+    grad_accum_steps=1,
+    num_workers=0,
+    max_steps=10,
+    lr=3e-4,
+    warmup_steps=20,
+    log_every=10,
+    eval_every=10,
+    save_every=10,
+    eval_steps=1,
+    mixed_precision=torch.cuda.is_available(),
+)
+
 
 def _cosine_with_warmup(warmup_steps: int, max_steps: int):
     def lr_lambda(step: int) -> float:
@@ -95,7 +110,7 @@ def evaluate(model: nn.Module, val_loader, cfg: TrainConfig, device: torch.devic
     for x, y in itertools.islice(val_loader, cfg.eval_steps):
         x, y = x.to(device), y.to(device)
         with torch.autocast(device.type, enabled=cfg.mixed_precision):
-            logits = model(x)
+            logits, _ = model(x)
         total += F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1)).item()
         n += 1
     model.train()
@@ -286,10 +301,10 @@ def train(model: nn.Module, cfg: TrainConfig = TrainConfig()) -> None:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", choices=["dense", "moeut"], default="dense",
-                        help="Which architecture to train (parameter-matched)")
     parser.add_argument("--debug", action="store_true",
                         help="Tiny model + 200 steps for a quick sanity check")
+    parser.add_argument("--micro", action="store_true",
+                        help="Tiny model + micro config for a sanity check")
     parser.add_argument("--shard_dir", default="filtered_c4")
     parser.add_argument("--tokenizer_path", default="tokenizer/c4_bpe8k.model")
     parser.add_argument("--output_dir", default=None)
@@ -297,17 +312,18 @@ if __name__ == "__main__":
                         help="Path to a checkpoint (.pt) to resume training from")
     args = parser.parse_args()
 
-    if args.model == "moeut":
-        from models.moeut import MoEUT, MOEUT_CONFIG, DEBUG_CONFIG
-        build_model = lambda debug: MoEUT(DEBUG_CONFIG if debug else MOEUT_CONFIG)
-        default_out = "runs/debug_moeut" if args.debug else "runs/moeut"
-    else:
-        from models.dense_transformer import DenseTransformer, DEBUG_CONFIG, BASELINE_CONFIG
-        build_model = lambda debug: DenseTransformer(DEBUG_CONFIG if debug else BASELINE_CONFIG)
-        default_out = "runs/debug" if args.debug else "runs/baseline_dense"
+    from models.adaptive_moeut import AdaptiveMoEUT, ADAPTIVE_MOEUT_CONFIG, DEBUG_CONFIG
+    build_model = lambda debug: AdaptiveMoEUT(DEBUG_CONFIG if debug else ADAPTIVE_MOEUT_CONFIG)
+    default_out = "runs/debug_adaptive_moeut" if args.debug else "runs/adaptive_moeut"
 
     if args.debug:
         cfg = DEBUG_TRAIN_CONFIG
+        cfg.shard_dir = args.shard_dir
+        cfg.tokenizer_path = args.tokenizer_path
+        cfg.output_dir = args.output_dir or default_out
+        cfg.resume = args.resume
+    elif args.micro:
+        cfg = MICRO_TRAIN_CONFIG
         cfg.shard_dir = args.shard_dir
         cfg.tokenizer_path = args.tokenizer_path
         cfg.output_dir = args.output_dir or default_out
