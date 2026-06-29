@@ -16,6 +16,7 @@ class AdaptiveMoEUTOutput:
     reg_loss: torch.Tensor
     cache: MultilayerKVCache
     tokens_halted_at: torch.Tensor
+    collected_logits: list[torch.Tensor]
 
 
 class SwitchHeadCore(torch.nn.Module):
@@ -335,6 +336,7 @@ class AdaptiveMoEUT(torch.nn.Module):
 
         expected_loops = torch.zeros((B, T), device=x.device, dtype=x.dtype)
         tokens_halted_at = torch.zeros(self.max_loops, device=x.device, dtype=torch.int)
+        collected_logits = []
         
         accum_alpha = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
         weighted_prev_x = torch.zeros_like(x, device=x.device, dtype=x.dtype)
@@ -351,8 +353,10 @@ class AdaptiveMoEUT(torch.nn.Module):
                 new_cache[layer_idx] = cache_out
             
             alpha_hat = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
-            alpha_hat[active_mask] = self.halt_head(x[active_mask])
-            
+            active_logits = self.halt_head(x[active_mask])
+            alpha_hat[active_mask] = active_logits
+            collected_logits.append(active_logits.detach().float())
+
             alpha = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
             alpha[active_mask] = alpha_hat[active_mask] * (1 - accum_alpha[active_mask])
 
@@ -385,7 +389,7 @@ class AdaptiveMoEUT(torch.nn.Module):
             elif isinstance(layer, SwitchHeadCore):
                 reg_loss = reg_loss + self.att_entropy_reg * layer.get_reg_loss()
 
-        return AdaptiveMoEUTOutput(s, reg_loss, new_cache, tokens_halted_at)
+        return AdaptiveMoEUTOutput(s, reg_loss, new_cache, tokens_halted_at, collected_logits)
 
     @torch.no_grad
     def reset_parameters(self):
