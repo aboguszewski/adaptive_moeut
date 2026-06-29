@@ -408,11 +408,12 @@ class AdaptiveMoEUTLM(torch.nn.Module):
                  ff_n_experts: int, att_n_experts: int, d_head: Optional[int] = None,
                  group_size: int = 2, ff_k: int = 8,  att_k: int = 2, ff_expert_dropout: float = 0.0,
                  att_expert_dropout: float = 0.0, ff_expert_size: int = 128, dropout: float = 0.0, 
-                 entropy_reg: float = 0.01, att_entropy_reg: float = 0.001, attention = SwitchHeadRope):
+                 entropy_reg: float = 0.01, att_entropy_reg: float = 0.001, attention = SwitchHeadRope,
+                 init_halt_bias: float = -3, default_halt_thresh: float = 0.999):
         super().__init__()
         self.transformer = AdaptiveMoEUT(d_model, max_loops, n_heads, ff_expert_size, ff_n_experts, att_n_experts,
                                  d_head, att_k, ff_k, ff_expert_dropout, att_expert_dropout, dropout,
-                                 entropy_reg, att_entropy_reg, attention, group_size)
+                                 entropy_reg, att_entropy_reg, attention, group_size, init_halt_bias, default_halt_thresh)
 
         self.max_loops = max_loops
         self.embedding = torch.nn.Embedding(n_tokens, d_model)
@@ -426,7 +427,7 @@ class AdaptiveMoEUTLM(torch.nn.Module):
         self.transformer.reset_parameters()
 
     def forward(self, x: torch.Tensor, mask: Optional[AttentionMask] = None,
-                kv_cache: MultilayerKVCache = None) -> MoEUTOutput:
+                kv_cache: MultilayerKVCache = None) -> AdaptiveMoEUTOutput:
 
         if mask is None:
             mask = AttentionMask(None, self.generate_causal_attention_mask(x.shape[-1]))
