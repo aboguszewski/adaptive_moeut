@@ -2,8 +2,8 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple, Optional
 import math
-from .cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
 
+from cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
 from moeut_code import (
     AttentionMask, MoEUTOutput, MultilayerKVCache, KVCache,
     entropy_reg, RotaryPosEncoding, SigmaMoE
@@ -114,7 +114,7 @@ class SwitchHeadCore(torch.nn.Module):
         self.sel_hist = []
         return loss
 
-    def forward(self, q_src: torch.Tensor, k_src: torch.Tensor, v_src: torch.Tensor, att_mask: Optional[AttentionMask],
+    def forward(self, q_src: torch.Tensor, k_src: torch.Tensor, v_src: torch.Tensor, mask: Optional[AttentionMask],
                 active_mask: torch.Tensor | None = None, kv_cache: KVCache = None, loop_idx: int = 0) -> Tuple[torch.Tensor, KVCache]:
         scale = self.scale.sqrt()
 
@@ -183,7 +183,7 @@ class SwitchHeadCore(torch.nn.Module):
         q = self.dropout(q)
         
         pos_offset = k_att.shape[-2] - q.shape[-2]
-        res = self.attend(pos_offset, v_att, k_att, q, self.get_mask_tensor(v_att.shape[-2], att_mask))
+        res = self.attend(pos_offset, v_att, k_att, q, self.get_mask_tensor(v_att.shape[-2], mask))
         res = res.transpose(-2, -3)
 
         if self.n_experts > 1:
@@ -327,34 +327,32 @@ class AdaptiveMoEUT(torch.nn.Module):
         expected_loops = torch.zeros((B, T), device=x.device, dtype=x.dtype)
         
         accum_alpha = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
-        not_halt_prob = torch.ones(token_batch_shape, device=x.device, dtype=x.dtype)
-        weighted_prev_x = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
-        active_mask = torch.ones((B, T), device=x.device, dtype=torch.bool)
+        weighted_prev_x = torch.zeros_like(x, device=x.device, dtype=x.dtype)
         
-        s = x
-        active_mask = torch.ones_like(x)
-        new_cache = {}
+        s = x.clone()
+        active_mask = torch.ones((B, T), device=x.device, dtype=torch.bool)
+        new_cache = kv_cache.copy() if kv_cache is not None else {}
 
         for loop in range(self.max_loops):
             for layer_idx,  layer in enumerate(self.layers):
-                cache = kv_cache.setdefault(layer_idx, {}) if kv_cache is not None else None
-                x, _ = layer(x, s, active_mask, mask, cache, loop_idx=loop)
+                cache_in = new_cache.get(layer_idx, {})
+                x, cache_out = layer(x, s, active_mask, mask, cache_in, loop_idx=loop)
+                new_cache[layer_idx] = cache_out
             
-            alpha_hat = torch.zeros_like(x)
+            alpha_hat = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
             alpha_hat[active_mask] = self.halt_head(x[active_mask])
             
-            alpha = torch.zeros_like(x)
-            alpha[active_mask] = alpha_hat[active_mask] * not_halt_prob[active_mask]
+            alpha = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
+            alpha[active_mask] = alpha_hat[active_mask] * (1 - accum_alpha[active_mask])
 
             s[active_mask] = (1 - accum_alpha[active_mask]) * x[active_mask] + weighted_prev_x[active_mask]
 
             accum_alpha[active_mask] += alpha[active_mask]
-            not_halt_prob[active_mask] *= (1 - alpha_hat[active_mask])
             weighted_prev_x[active_mask] += alpha[active_mask] * x[active_mask]
             
             expected_loops[active_mask] += alpha[active_mask].squeeze(-1) * (loop + 1)
 
-            active_mask = accum_alpha < halt_thresh
+            active_mask = (accum_alpha < halt_thresh).squeeze(-1)
 
             if not active_mask.any():
                 break
@@ -373,7 +371,7 @@ class AdaptiveMoEUT(torch.nn.Module):
 
     @torch.no_grad
     def reset_parameters(self):
-        scale = math.sqrt(2 / (self.n_repeats * len(self.layers)))
+        scale = math.sqrt(2 / (self.max_loops * len(self.layers)))
         for layer in self.modules():
             if isinstance(layer, (SwitchHeadCore, SigmaMoE)):
                 layer.reset_parameters(scale)
@@ -384,17 +382,17 @@ class AdaptiveMoEUT(torch.nn.Module):
                 torch.nn.init.zeros_(layer.bias)
             
 class AdaptiveMoEUTLM(torch.nn.Module):
-    def __init__(self, n_tokens: int, d_model: int, n_layers: int, n_heads: int,
+    def __init__(self, n_tokens: int, d_model: int, max_loops: int, n_heads: int,
                  ff_n_experts: int, att_n_experts: int, d_head: Optional[int] = None,
                  group_size: int = 2, ff_k: int = 8,  att_k: int = 2, ff_expert_dropout: float = 0.0,
                  att_expert_dropout: float = 0.0, ff_expert_size: int = 128, dropout: float = 0.0, 
                  entropy_reg: float = 0.01, att_entropy_reg: float = 0.001, attention = SwitchHeadRope):
         super().__init__()
-        self.transformer = AdaptiveMoEUT(d_model, n_layers, n_heads, ff_expert_size, ff_n_experts, att_n_experts,
+        self.transformer = AdaptiveMoEUT(d_model, max_loops, n_heads, ff_expert_size, ff_n_experts, att_n_experts,
                                  d_head, att_k, ff_k, ff_expert_dropout, att_expert_dropout, dropout,
                                  entropy_reg, att_entropy_reg, attention, group_size)
 
-        self.n_layers = n_layers
+        self.max_loops = max_loops
         self.embedding = torch.nn.Embedding(n_tokens, d_model)
         self.lm_head = torch.nn.Linear(d_model, n_tokens)
         self.out_norm = torch.nn.LayerNorm(d_model)
@@ -412,7 +410,7 @@ class AdaptiveMoEUTLM(torch.nn.Module):
             mask = AttentionMask(None, self.generate_causal_attention_mask(x.shape[-1]))
 
         x = self.embedding(x)
-        out = self.transformer(x, mask, kv_cache)
+        out = self.transformer(x=x, mask=mask, kv_cache=kv_cache)
         out.outputs = self.lm_head(self.out_norm(out.outputs))
         return out
 
