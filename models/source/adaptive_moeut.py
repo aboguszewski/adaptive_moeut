@@ -4,8 +4,8 @@ from typing import Tuple, Optional
 import math
 from dataclasses import dataclass
 
-from cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
-from moeut_code import (
+from .cvmm import cvmm, cvmm_prepare_sel2, CVMMSel
+from .moeut import (
     AttentionMask, MoEUTOutput, MultilayerKVCache, KVCache,
     entropy_reg, RotaryPosEncoding, SigmaMoE
 )

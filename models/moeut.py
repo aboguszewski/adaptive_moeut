@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from source import MoEUTLM
+from models.source import MoEUTLM
 
 @dataclass
 class MoEUTConfig:
