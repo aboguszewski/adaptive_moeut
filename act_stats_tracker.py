@@ -16,7 +16,7 @@ class ACTStatsTracker:
     def update(self, output):
         self.histogram += output.tokens_halted_at
 
-        for loop_idx, loop_logits in enumerate(output.halting_logits):
+        for loop_idx, loop_logits in enumerate(output.halt_logits):
             if loop_logits.numel() > 0:
                 self.logit_sums[loop_idx] += loop_logits.sum()
                 self.logit_sq_sums[loop_idx] += (loop_logits ** 2).sum()
