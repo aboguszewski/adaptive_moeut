@@ -183,8 +183,8 @@ class SwitchHeadCore(torch.nn.Module):
                             kv_cache["k"] = torch.where(b_mask, k, kv_cache["k"])
                             kv_cache["v"] = torch.where(b_mask, v, kv_cache["v"])
                         else:
-                            kv_cache["k"][active_mask] = k[active_mask]
-                            kv_cache["v"][active_mask] = v[active_mask]
+                            kv_cache["k"][:] = torch.where(b_mask, k, kv_cache["k"])
+                            kv_cache["v"][:] = torch.where(b_mask, v, kv_cache["v"])
                     
                     else:
                         curr_k = kv_cache["k"][..., -T_curr:, :]
