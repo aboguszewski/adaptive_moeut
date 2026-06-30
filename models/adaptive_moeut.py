@@ -4,8 +4,12 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from utils.adaptive_moeut import AdaptiveMoEUTLM, AdaptiveMoEUTOutput
-from utils.moeut_code import AttentionMask, MultilayerKVCache
+from source import (
+    AdaptiveMoEUTLM,
+    AdaptiveMoEUTOutput,
+    AttentionMask,
+    MultilayerKVCache
+)
 
 @dataclass
 class AdaptiveMoEUTConfig():
