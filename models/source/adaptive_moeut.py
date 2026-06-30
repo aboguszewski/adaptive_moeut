@@ -211,7 +211,43 @@ class SwitchHeadCore(torch.nn.Module):
 
         B, T, _ = q_src.shape
         out_dim = self.projection_size * self.n_heads
-        
+
+        # DENSE path (training): every token participates, so we compute on full
+        # tensors with static shapes -- no boolean gather/scatter and no
+        # `active_mask.any()` host-sync. This is the fast path; the masked code
+        # below exists only for dynamic token-dropping at inference.
+        if active_mask is None:
+            q = self.q(q_src) * scale.type_as(q_src)
+            k = self.k(k_src) * scale.type_as(k_src)
+
+            if self.n_experts > 1:
+                v_sel, v_sel_r = self.get_sel(k_src, self.sel_v)
+                o_sel, o_sel_r = self.get_sel(q_src, self.sel_o)
+                if self.training:
+                    self.sel_hist.append((o_sel_r, v_sel_r.view(-1, *v_sel_r.shape[2:])))
+                v = cvmm(v_src, v_sel, self.v).transpose(-2, -3)
+            else:
+                o_gate = F.sigmoid(F.linear(q_src, self.sel_o))
+                v = self.project_to_torch_order(F.linear(v_src, self.v))
+
+            q = self.project_to_torch_order(q)
+            k = self.project_to_torch_order(k)
+            q = self.dropout(q)
+
+            # No kv_cache during dense training (full sequence, causal mask).
+            res = self.attend(0, v, k, q, self.get_mask_tensor(v.shape[-2], mask))
+            res = res.transpose(-2, -3)
+
+            if self.n_experts > 1:
+                o_sel.sel_index = o_sel.out_index // o_sel.reduction_weight.shape[-1]
+                o_sel.reduction_weight = o_sel.reduction_weight.flatten(-2)
+                out = cvmm(res, o_sel, self.o)
+            else:
+                res = res * o_gate[..., None]
+                out = F.linear(res.flatten(-2), self.o)
+
+            return out, kv_cache
+
         q = torch.zeros(B, T, out_dim, device=q_src.device, dtype=q_src.dtype)
         if active_mask is not None and active_mask.any():
             q_active = self.q(q_src[active_mask])
@@ -382,7 +418,17 @@ class AdaptiveMoEUTLayer(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, s: torch.Tensor, active_mask: torch.Tensor, 
         mask: Optional[AttentionMask] = None, kv_cache: KVCache = None, loop_idx: int = 0) -> Tuple[torch.Tensor, KVCache]:
-        
+
+        # DENSE path (training): no masking, no host-sync. See SwitchHeadCore.
+        if active_mask is None:
+            xnorm = self.ln1(x)
+            snorm = self.ln_s(s)
+            att, kv_cache = self.attention(q_src=xnorm, k_src=snorm, v_src=s, mask=mask,
+                                           active_mask=None, kv_cache=kv_cache, loop_idx=loop_idx)
+            x = x + self.drop(att)
+            x = x + self.ffn(x, self.ln2(x))
+            return x, kv_cache
+
         xnorm = torch.zeros_like(x)
         if active_mask.any():
             xnorm[active_mask] = self.ln1(x[active_mask])
@@ -450,59 +496,83 @@ class AdaptiveMoEUT(torch.nn.Module):
         weighted_prev_x = torch.zeros_like(x, device=x.device, dtype=x.dtype)
         
         s = x.clone()
-        old_active_mask = torch.zeros((B, T), device=x.device, dtype=torch.bool)
-        active_mask = torch.ones((B, T), device=x.device, dtype=torch.bool)
         new_cache = kv_cache.copy() if kv_cache is not None else {}
 
-        for loop in range(self.max_loops):
-            for layer_idx,  layer in enumerate(self.layers):
-                cache_in = new_cache.get(layer_idx, {})
-                x, cache_out = layer(x, s, active_mask, mask, cache_in, loop_idx=loop)
-                new_cache[layer_idx] = cache_out
-            
-            alpha_hat = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
-            active_logits = self.halt_head(x[active_mask])
-            alpha_hat[active_mask] = active_logits
-            halt_logits.append(active_logits.detach().float())
+        if self.training:
+            # ---- DENSE PonderNet-style training -------------------------------
+            # Every token runs through every loop (static shapes, no boolean
+            # masking, no host-sync). Halting enters only as soft weights via
+            # `alpha`; the dynamic token-dropping that saves compute lives in the
+            # inference branch below. The learned halting head is identical, so
+            # adaptivity is fully exploitable at inference.
+            for loop in range(self.max_loops):
+                for layer in self.layers:
+                    x, _ = layer(x, s, None, mask, None, loop_idx=loop)
 
-            alpha = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
-            alpha[active_mask] = alpha_hat[active_mask] * (1 - accum_alpha[active_mask])
+                alpha_hat = self.halt_head(x)                  # (B, T, 1), all tokens
+                halt_logits.append(alpha_hat.detach().float())
 
-            if self.training:
-                b_mask_3d = active_mask.unsqueeze(-1)
-                
-                new_s = (1 - accum_alpha) * x + weighted_prev_x
-                s = torch.where(b_mask_3d, new_s, s)
-                
-                accum_alpha = torch.where(b_mask_3d, accum_alpha + alpha, accum_alpha)
-                weighted_prev_x = torch.where(b_mask_3d, weighted_prev_x + alpha * x, weighted_prev_x)
-                
-                expected_loops = torch.where(active_mask, expected_loops + alpha.squeeze(-1) * (loop + 1), expected_loops)
-            else:
+                alpha = alpha_hat * (1 - accum_alpha)
+                prev_accum = accum_alpha
+
+                # s uses the OLD accumulators (matches the original update order).
+                s = (1 - accum_alpha) * x + weighted_prev_x
+                accum_alpha = accum_alpha + alpha
+                weighted_prev_x = weighted_prev_x + alpha * x
+                expected_loops = expected_loops + alpha.squeeze(-1) * (loop + 1)
+
+                # Monitoring only: where each token *would* halt at inference.
+                # no_grad + stays on GPU (tracker syncs to CPU at log time).
+                with torch.no_grad():
+                    crossed = (prev_accum < halt_thresh) & (accum_alpha >= halt_thresh)
+                    tokens_halted_at[loop] = crossed.squeeze(-1).sum()
+
+            remainder = 1.0 - accum_alpha.squeeze(-1)
+            expected_loops = expected_loops + remainder * self.max_loops
+            with torch.no_grad():
+                never_halted = (accum_alpha < halt_thresh).squeeze(-1)
+                tokens_halted_at[self.max_loops - 1] += never_halted.sum()
+        else:
+            # ---- Dynamic adaptive computation at inference --------------------
+            # Tokens are dropped from `active_mask` once their cumulative halt
+            # probability crosses the threshold, so deeper loops compute on fewer
+            # tokens -- this is where the FLOP savings are realised.
+            old_active_mask = torch.zeros((B, T), device=x.device, dtype=torch.bool)
+            active_mask = torch.ones((B, T), device=x.device, dtype=torch.bool)
+
+            for loop in range(self.max_loops):
+                for layer_idx, layer in enumerate(self.layers):
+                    cache_in = new_cache.get(layer_idx, {})
+                    x, cache_out = layer(x, s, active_mask, mask, cache_in, loop_idx=loop)
+                    new_cache[layer_idx] = cache_out
+
+                alpha_hat = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
+                active_logits = self.halt_head(x[active_mask])
+                alpha_hat[active_mask] = active_logits
+                halt_logits.append(active_logits.detach().float())
+
+                alpha = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
+                alpha[active_mask] = alpha_hat[active_mask] * (1 - accum_alpha[active_mask])
+
                 s[active_mask] = (1 - accum_alpha[active_mask]) * x[active_mask] + weighted_prev_x[active_mask]
-                
                 accum_alpha[active_mask] += alpha[active_mask]
                 weighted_prev_x[active_mask] += alpha[active_mask] * x[active_mask]
-                
                 expected_loops[active_mask] += alpha[active_mask].squeeze(-1) * (loop + 1)
 
-            old_active_mask = active_mask.clone()
-            active_mask = (accum_alpha < halt_thresh).squeeze(-1)
-            
-            just_halted = old_active_mask & ~active_mask
-            tokens_halted_at[loop] = just_halted.sum()
+                old_active_mask = active_mask.clone()
+                active_mask = (accum_alpha < halt_thresh).squeeze(-1)
 
-            if not active_mask.any():
-                break
+                just_halted = old_active_mask & ~active_mask
+                tokens_halted_at[loop] = just_halted.sum()
 
-        remainder = 1.0 - accum_alpha.squeeze(-1)
-        if self.training:
-            expected_loops = expected_loops + remainder * self.max_loops
-        else:
+                if not active_mask.any():
+                    break
+
+            remainder = 1.0 - accum_alpha.squeeze(-1)
             expected_loops += remainder * self.max_loops
-        
-        if active_mask.any():
-            tokens_halted_at[self.max_loops - 1] += active_mask.sum()
+
+            if active_mask.any():
+                tokens_halted_at[self.max_loops - 1] += active_mask.sum()
 
         reg_loss = expected_loops.mean()
         for layer in self.modules():

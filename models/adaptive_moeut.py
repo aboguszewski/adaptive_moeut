@@ -14,7 +14,9 @@ from models.source import (
 @dataclass
 class AdaptiveMoEUTConfig():
     vocab_size: int = 8192
-    max_loops: int = 16         # the network will be interrupted at max_loops even if not all tokens have halted
+    max_loops: int = 4          # the network will be interrupted at max_loops even if not all tokens have halted
+                                # 4 loops x group_size=2 layers = 8 layer-passes = exactly the MoEUT n_layers=8
+                                # baseline's depth (compute-matched), and ~2.5x faster than max_loops=10.
     group_size: int = 2         # unique layers
     model_dim: int = 512
     n_heads: int = 4
