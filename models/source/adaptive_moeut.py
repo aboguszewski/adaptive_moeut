@@ -179,21 +179,29 @@ class SwitchHeadCore(torch.nn.Module):
                     b_mask = active_mask.view(B, 1, T_curr, 1)
                     
                     if kv_cache["k"].shape[-2] == T_curr:
-                        kv_cache["k"] = torch.where(b_mask, k, kv_cache["k"])
-                        kv_cache["v"] = torch.where(b_mask, v, kv_cache["v"])
+                        if self.training:
+                            kv_cache["k"] = torch.where(b_mask, k, kv_cache["k"])
+                            kv_cache["v"] = torch.where(b_mask, v, kv_cache["v"])
+                        else:
+                            kv_cache["k"][active_mask] = k[active_mask]
+                            kv_cache["v"][active_mask] = v[active_mask]
                     
                     else:
                         curr_k = kv_cache["k"][..., -T_curr:, :]
                         curr_v = kv_cache["v"][..., -T_curr:, :]
                         
-                        updated_k = torch.where(b_mask, k, curr_k)
-                        updated_v = torch.where(b_mask, v, curr_v)
-                        
-                        past_k = kv_cache["k"][..., :-T_curr, :]
-                        past_v = kv_cache["v"][..., :-T_curr, :]
-                        
-                        kv_cache["k"] = torch.cat([past_k, updated_k], dim=-2)
-                        kv_cache["v"] = torch.cat([past_v, updated_v], dim=-2)
+                        if self.training:
+                            updated_k = torch.where(b_mask, k, curr_k)
+                            updated_v = torch.where(b_mask, v, curr_v)
+                            
+                            past_k = kv_cache["k"][..., :-T_curr, :]
+                            past_v = kv_cache["v"][..., :-T_curr, :]
+                            
+                            kv_cache["k"] = torch.cat([past_k, updated_k], dim=-2)
+                            kv_cache["v"] = torch.cat([past_v, updated_v], dim=-2)
+                        else:
+                            kv_cache["k"][..., -T_curr:, :] = torch.where(b_mask, k, curr_k)
+                            kv_cache["v"][..., -T_curr:, :] = torch.where(b_mask, v, curr_v)
 
             k_att = kv_cache["k"]
             v_att = kv_cache["v"]
@@ -309,7 +317,15 @@ class AdaptiveMoEUTLayer(torch.nn.Module):
             x_active = x[active_mask]
             x_active_normed = self.ln2(x_active)
             upd_active = self.ffn(x_active, x_active_normed)
-            x[active_mask] = x_active + upd_active
+            
+            if self.training:
+                # Out-of-place for autograd memory
+                upd_full = torch.zeros_like(x)
+                upd_full[active_mask] = upd_active
+                x = x + upd_full
+            else:
+                # Fast, in-place for inference
+                x[active_mask] = x_active + upd_active
         
         return x, kv_cache
 
@@ -371,12 +387,23 @@ class AdaptiveMoEUT(torch.nn.Module):
             alpha = torch.zeros(token_batch_shape, device=x.device, dtype=x.dtype)
             alpha[active_mask] = alpha_hat[active_mask] * (1 - accum_alpha[active_mask])
 
-            s[active_mask] = (1 - accum_alpha[active_mask]) * x[active_mask] + weighted_prev_x[active_mask]
-
-            accum_alpha[active_mask] += alpha[active_mask]
-            weighted_prev_x[active_mask] += alpha[active_mask] * x[active_mask]
-            
-            expected_loops[active_mask] += alpha[active_mask].squeeze(-1) * (loop + 1)
+            if self.training:
+                b_mask_3d = active_mask.unsqueeze(-1)
+                
+                new_s = (1 - accum_alpha) * x + weighted_prev_x
+                s = torch.where(b_mask_3d, new_s, s)
+                
+                accum_alpha = torch.where(b_mask_3d, accum_alpha + alpha, accum_alpha)
+                weighted_prev_x = torch.where(b_mask_3d, weighted_prev_x + alpha * x, weighted_prev_x)
+                
+                expected_loops = torch.where(active_mask, expected_loops + alpha.squeeze(-1) * (loop + 1), expected_loops)
+            else:
+                s[active_mask] = (1 - accum_alpha[active_mask]) * x[active_mask] + weighted_prev_x[active_mask]
+                
+                accum_alpha[active_mask] += alpha[active_mask]
+                weighted_prev_x[active_mask] += alpha[active_mask] * x[active_mask]
+                
+                expected_loops[active_mask] += alpha[active_mask].squeeze(-1) * (loop + 1)
 
             old_active_mask = active_mask.clone()
             active_mask = (accum_alpha < halt_thresh).squeeze(-1)
@@ -388,7 +415,10 @@ class AdaptiveMoEUT(torch.nn.Module):
                 break
 
         remainder = 1.0 - accum_alpha.squeeze(-1)
-        expected_loops += remainder * self.max_loops
+        if self.training:
+            expected_loops = expected_loops + remainder * self.max_loops
+        else:
+            expected_loops += remainder * self.max_loops
         
         if active_mask.any():
             tokens_halted_at[self.max_loops - 1] += active_mask.sum()
