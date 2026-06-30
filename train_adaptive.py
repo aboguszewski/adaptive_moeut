@@ -41,6 +41,7 @@ class TrainConfig:
     eval_every: int = 500
     save_every: int = 2_000
     eval_steps: int = 50            # validation batches per eval call
+    keep_last_checkpoints: int = 5  # rotate: keep only the N newest ckpts (SPIKE saves kept)
 
     # --- spike detection ---
     spike_threshold: float = 1.5    # warn if loss > threshold × EMA loss
@@ -117,7 +118,8 @@ def evaluate(model: nn.Module, val_loader, cfg: TrainConfig, device: torch.devic
     return total / max(n, 1)
 
 
-def _save(out_dir: Path, model: nn.Module, optimizer, scheduler, step: int) -> None:
+def _save(out_dir: Path, model: nn.Module, optimizer, scheduler, step: int,
+          keep_last: int | None = None) -> None:
     path = out_dir / f"ckpt_{step:07d}.pt"
     torch.save({
         "step": step,
@@ -126,6 +128,16 @@ def _save(out_dir: Path, model: nn.Module, optimizer, scheduler, step: int) -> N
         "scheduler": scheduler.state_dict(),
     }, path)
     print(f"  checkpoint → {path}")
+
+    # Rotation: keep only the `keep_last` newest regular checkpoints so a long,
+    # frequently-checkpointed run doesn't blow the disk quota. SPIKE checkpoints
+    # are excluded (kept for debugging). Names are zero-padded → lexical sort
+    # equals step order.
+    if keep_last is not None and keep_last > 0:
+        ckpts = sorted(p for p in out_dir.glob("ckpt_*.pt") if "SPIKE" not in p.name)
+        for old in ckpts[:-keep_last]:
+            old.unlink()
+            print(f"  removed old checkpoint {old.name}")
 
 
 def train(model: nn.Module, cfg: TrainConfig = TrainConfig()) -> None:
@@ -184,14 +196,43 @@ def train(model: nn.Module, cfg: TrainConfig = TrainConfig()) -> None:
     # --- resume ---
     start_step = 0
     if cfg.resume:
-        ckpt = torch.load(cfg.resume, map_location=device)
-        model.load_state_dict(ckpt["model"])
-        if "optimizer" in ckpt:
-            optimizer.load_state_dict(ckpt["optimizer"])
-        if "scheduler" in ckpt:
-            scheduler.load_state_dict(ckpt["scheduler"])
-        start_step = ckpt.get("step", 0)
-        print(f"Resumed from {cfg.resume} at step {start_step}")
+        # Try the requested checkpoint, then progressively older ones in the run
+        # dir. A job killed mid-`torch.save` (e.g. at the SLURM time limit) leaves
+        # a truncated newest checkpoint; torch.load raises on it, so we fall back
+        # to the next-older one. This keeps a chained-resume run alive instead of
+        # crashing the whole chain on one bad save. SPIKE saves are skipped.
+        candidates = [Path(cfg.resume)]
+        candidates += sorted(
+            (p for p in out_dir.glob("ckpt_*.pt") if "SPIKE" not in p.name),
+            reverse=True,
+        )
+        ckpt, resume_path, seen = None, None, set()
+        for cand in candidates:
+            cand = cand.resolve()
+            if cand in seen or not cand.exists():
+                continue
+            seen.add(cand)
+            try:
+                # Load fully before touching the model, so a bad candidate can't
+                # leave the model half-overwritten.
+                ckpt = torch.load(cand, map_location=device)
+                resume_path = cand
+                break
+            except Exception as e:
+                print(f"WARNING: checkpoint {cand} is unreadable "
+                      f"({type(e).__name__}: {e}); falling back to an older one")
+                ckpt = None
+
+        if ckpt is not None:
+            model.load_state_dict(ckpt["model"])
+            if "optimizer" in ckpt:
+                optimizer.load_state_dict(ckpt["optimizer"])
+            if "scheduler" in ckpt:
+                scheduler.load_state_dict(ckpt["scheduler"])
+            start_step = ckpt.get("step", 0)
+            print(f"Resumed from {resume_path} at step {start_step}")
+        else:
+            print("WARNING: no loadable checkpoint found — starting from scratch")
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,}")
@@ -287,14 +328,14 @@ def train(model: nn.Module, cfg: TrainConfig = TrainConfig()) -> None:
 
         # --- checkpoint ---
         if step % cfg.save_every == 0 and step > 0:
-            _save(out_dir, model, optimizer, scheduler, step)
+            _save(out_dir, model, optimizer, scheduler, step, cfg.keep_last_checkpoints)
 
         step += 1
 
     # final eval + checkpoint
     val_loss = evaluate(model, val_loader, cfg, device)
     print(f"\n[final] val_loss {val_loss:.4f} | val_ppl {math.exp(val_loss):.1f}")
-    _save(out_dir, model, optimizer, scheduler, step)
+    _save(out_dir, model, optimizer, scheduler, step, cfg.keep_last_checkpoints)
     writer.close()
 
 
@@ -310,6 +351,13 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--resume", default=None,
                         help="Path to a checkpoint (.pt) to resume training from")
+    parser.add_argument("--batch_size", type=int, default=None,
+                        help="Override sequences per micro-batch (lower it to fit a smaller GPU)")
+    parser.add_argument("--grad_accum_steps", type=int, default=None,
+                        help="Override gradient-accumulation steps (raise it to keep the effective "
+                             "batch when --batch_size is lowered: effective = batch_size * grad_accum_steps)")
+    parser.add_argument("--seq_len", type=int, default=None,
+                        help="Override context length (tokens per sample)")
     args = parser.parse_args()
 
     from models.adaptive_moeut import AdaptiveMoEUT, ADAPTIVE_MOEUT_CONFIG, DEBUG_CONFIG
@@ -335,5 +383,19 @@ if __name__ == "__main__":
             output_dir=args.output_dir or default_out,
             resume=args.resume,
         )
+
+    # Per-GPU memory overrides (apply to whichever config was selected). Lower
+    # --batch_size to fit a smaller card and bump --grad_accum_steps to keep the
+    # effective batch unchanged; the train loop already divides loss by
+    # grad_accum_steps, so convergence is identical.
+    for attr, val in [("batch_size", args.batch_size),
+                      ("grad_accum_steps", args.grad_accum_steps),
+                      ("seq_len", args.seq_len)]:
+        if val is not None:
+            setattr(cfg, attr, val)
+
+    print(f"Config: batch_size={cfg.batch_size} grad_accum_steps={cfg.grad_accum_steps} "
+          f"seq_len={cfg.seq_len} -> effective batch "
+          f"{cfg.batch_size * cfg.grad_accum_steps} seqs")
 
     train(build_model(args.debug or args.micro), cfg)
