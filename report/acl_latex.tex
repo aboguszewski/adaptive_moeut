@@ -16,8 +16,7 @@
 \usepackage{subcaption}
 
 \usepackage{tikz}
-\usetikzlibrary{positioning}
-\usetikzlibrary{arrows}
+\usetikzlibrary{positioning, fit, backgrounds, arrows.meta}
 
 \title{Adaptive MoEUT}
 
@@ -36,19 +35,19 @@
 \end{abstract}
 
 \section{Introduction}
-\textit{Universal Transformers (UT)} are not a new idea \cite{ut}.
-They are a variation of the \textit{Vanilla Transformer (VT)} \cite{transformer} architecture that achieves network depth not via stacking multiple transformer blocks, but rather reusing the same blocks in a loop.
-They are the spiritual ancestor of \textit{Recurrent Neural Networks (RNNs)} in the transformer paradigm and are usually designed either as pure cycles or cycles with additional initial and final layers (see Figure~\ref{fig:ut-designs}).
+\textit{Universal Transformers} (UTs) are not a new idea \cite{ut}.
+They are a variation of the \textit{Vanilla Transformer} (VT) \cite{transformer} architecture that achieves network depth not via stacking multiple transformer blocks, but rather reusing the same blocks in a loop.
+They are the spiritual ancestor of \textit{Recurrent Neural Networks} (RNNs) in the transformer paradigm and are usually designed either as pure cycles or cycles with additional initial and final layers (see Figure~\ref{fig:ut-designs}).
 
 Proponents of this architecture argue that they generalize better - that the built-in recursion allows the models to decompose structured problems, and generalize to longer sequences \cite{moeut}.
 However the weight-sharing also introduces some scaling-related problems, because a UT that loops $N$ times is equivalent in depth to a $N$ layer VT, but only has $\frac{1}{N}$ parameters.
 One of the ideas to combat this issue is to make the UT's layer $N$ times wider, which would result in a usually prohibitive jump in compute and memory requirements.
-Another approach is to modify the UT's architecture to introduce some sparsity like in \textit{Mixture-of-Experts (MoE)} \cite{moe}.
+Another approach is to modify the UT's architecture to introduce some sparsity like in \textit{Mixture-of-Experts} (MoE) \cite{moe}.
 This results in a larger parameter count that is arbitrarily scalable, while fixing the compute and memory requirements.
 
-\textit{Mixture-of-Experts Universal Transformer (MoEUT)} \cite{moeut} is a UT architecture that injects sparsity to both the attention computation via \textit{SwitchHead} \cite{switchhead}, and the feedforward layer via $\sigma$-MoE.
+\textit{Mixture-of-Experts Universal Transformer} (MoEUT) \cite{moeut} is a UT architecture that injects sparsity to both the attention computation via \textit{SwitchHead} \cite{switchhead}, and the feedforward layer via $\sigma$-MoE.
 
-In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute Time (ACT)} by using the Stick-Breaking Halting algorithm proposed in the \textit{Sparse Universal Transformer} \cite{sut}.
+In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute Time} (ACT) by using the Stick-breaking Halting algorithm proposed in the \textit{Sparse Universal Transformer} \cite{sut}.
 
 \begin{figure}[htbp]
     \centering
@@ -56,7 +55,7 @@ In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute
         \centering
         \begin{tikzpicture}[
             module/.style={draw, very thick, rounded corners, minimum width=15ex},
-            ubmodule/.style={module, fill=blue!20},
+            ubmodule/.style={module, fill=gray!20},
             arrow/.style={-stealth, thick}, 
             corner loop/.style={-stealth, thick, line cap=round}
         ]
@@ -78,9 +77,9 @@ In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute
         \centering
         \begin{tikzpicture}[
             module/.style={draw, very thick, rounded corners, minimum width=15ex},
-            pmodule/.style={module, fill=yellow!20},
-            emodule/.style={module, fill=green!20},
-            ubmodule/.style={module, fill=blue!20},
+            pmodule/.style={module, fill=gray!20},
+            emodule/.style={module, fill=gray!20},
+            ubmodule/.style={module, fill=gray!20},
             arrow/.style={-stealth, thick}, 
             corner loop/.style={-stealth, thick, line cap=round}
         ]
@@ -106,6 +105,127 @@ In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute
 \end{figure}
 
 \section{Model Architecture}
+
+\subsection{Overview}
+TODO
+
+\subsection{Transformer Block}
+TODO
+
+\begin{figure}
+\begin{tikzpicture}[
+    module/.style={draw, thick, darkgray, minimum height=0.9cm, align=center, rounded corners},
+    lnorm/.style={module, fill=yellow!20},
+    sel/.style={module, fill=blue!20, minimum width=1.2cm},
+    proj/.style={module, fill=gray!15, minimum width=1.2cm},
+    att/.style={module, fill=pink!40},
+    moe/.style={module, fill=green!20},
+    plus/.style={draw, thick, darkgray, circle, fill=gray!10, minimum size=0.9cm, inner sep=0pt},
+    arrow/.style={-stealth, thick, darkgray},
+    line/.style={thick, darkgray},
+    rounded corners=1pt,
+    scale=0.75, transform shape
+]
+    \begin{scope}[local bounding box=input_layer]
+        \node (h_in) at (0, -0.7) {$h$};
+        \node (s_in) at (1.8, -0.7) {$s$};
+    \end{scope}
+
+    \begin{scope}[local bounding box=bottom_block]
+        
+        % --- h Stream ---
+        \draw[line] (0, -0.4) -- (0, 0.4);
+        
+        % Split h: Left to Layernorm, Right to main Residual Spine
+        \draw[line] (0, 0.4) -- (-1.6, 0.4);
+        \node[lnorm, minimum width=2.6cm] (lnorm_h) at (-1.6, 1.5) {LayerNorm};
+        \draw[arrow] (-1.6, 0.4) -- (lnorm_h.south);
+        
+        % Projections from Layernorm_h
+        \node[sel] (sel_h) at (-2.4, 3.0) {Router};
+        \node[proj] (q) at (-0.8, 3.0) {Q};
+        
+        \draw[line] (lnorm_h.north) -- (-1.6, 2.3);
+        \draw[line] (-1.6, 2.3) -- (-2.4, 2.3); 
+        \draw[arrow] (-2.4, 2.3) -- (sel_h.south);
+        \draw[line] (-1.6, 2.3) -- (-0.8, 2.3); 
+        \draw[arrow] (-0.8, 2.3) -- (q.south);
+        
+        % --- s Stream ---
+        % Using preaction to smoothly jump over the h residual line
+        \draw[line, preaction={draw, white, line width=4pt}] (1.8, -0.4) -- (1.8, 0.9);
+        
+        % Split s: Left to Layernorm (for K), Right straight up (for V)
+        \draw[line] (1.8, 0.9) -- (1.0, 0.9);
+        \node[lnorm, minimum width=1.4cm] (lnorm_s) at (1.0, 1.5) {LayerNorm};
+        \draw[arrow] (1.0, 0.9) -- (lnorm_s.south);
+        
+        % Projection from Layernorm_s
+        \node[proj] (k) at (1.0, 3.0) {K};
+        \draw[arrow] (lnorm_s.north) -- (k.south);
+        
+        % The unprojected 's' routing for attention value
+        \draw[line] (1.8, 0.9) -- (2.4, 0.9);
+    \end{scope}
+
+    % ==========================================
+    % LAYER 2: Attention Block
+    % ==========================================
+    \begin{scope}[local bounding box=mid_block]
+        % SwitchHead sized to perfectly bracket the outer inputs (sel_h and s_val)
+        \node[att, minimum width=6.0cm] (switchhead) at (0, 4.5) {SwitchHead};
+        
+        % Arrows ascending into SwitchHead
+        \draw[arrow] (sel_h.north) -- (sel_h.north |- switchhead.south);
+        \draw[arrow] (q.north) -- (q.north |- switchhead.south);
+        \draw[arrow] (k.north) -- (k.north |- switchhead.south);
+        \draw[arrow] (2.4, 0.9) -- (2.4, 0.9 |- switchhead.south); % Raw s (Value)
+    \end{scope}
+
+    % ==========================================
+    % LAYER 3: Residual & MoE Block (h stream only)
+    % ==========================================
+    \begin{scope}[local bounding box=top_block]
+        % First Residual Addition
+        \node[plus] (plus1) at (0, 6.2) {$+$};
+        \draw[arrow] (switchhead.north) -- (plus1.south);
+        
+        % Establish the main right-side Residual line for h
+        \draw[line] (0, 0.4) -- (4.5, 0.4);
+        \draw[line] (4.5, 0.4) -- (4.5, 6.2);
+        \draw[arrow] (4.5, 6.2) -- (plus1.east);
+        
+        % MoE Nodes
+        \node[moe, minimum width=3.5cm] (moe) at (0, 8.5) {$\sigma$-MoE};
+        \node[lnorm, minimum width=2.2cm] (lnorm_moe) at (-2.7, 7.2) {LayerNorm};
+        \node[sel] (sel_moe) at (-2.7, 8.5) {Router};
+        
+        % MoE Routing (From + to Layernorm/MoE)
+        \coordinate (moe_split) at (0, 6.7);
+        \draw[line] (plus1.north) -- (moe_split);
+        \draw[arrow] (moe_split) -- (moe.south);
+        
+        \draw[line] (moe_split) -- (-2.7, 6.7);
+        \draw[arrow] (-2.7, 6.7) -- (lnorm_moe.south);
+        \draw[arrow] (lnorm_moe.north) -- (sel_moe.south);
+        \draw[arrow] (sel_moe.east) -- (moe.west);
+        
+        % Second Residual Addition
+        \node[plus] (plus2) at (0, 10.2) {$+$};
+        \draw[arrow] (moe.north) -- (plus2.south);
+        
+        % Continue main residual spine up to top +
+        \draw[line] (4.5, 6.2) -- (4.5, 10.2);
+        \draw[arrow] (4.5, 10.2) -- (plus2.east);
+        
+        % Final Output
+        \draw[arrow] (plus2.north) -- (0, 11.2);
+    \end{scope}
+
+\end{tikzpicture}
+\caption{Transformer Block}
+\label{fig:transformer-block}
+\end{figure}
 
 \section{Experiments}
 
