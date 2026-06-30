@@ -38,9 +38,9 @@ class AdaptiveMoEUTConfig():
 ADAPTIVE_MOEUT_CONFIG = AdaptiveMoEUTConfig()
 
 DEBUG_CONFIG = AdaptiveMoEUTConfig(
-    group_size=1, model_dim=32, n_heads=2, head_dim=16,
+    group_size=1, model_dim=64, n_heads=4, head_dim=16,
     att_n_experts=2, ff_n_experts=2, ff_expert_size=64, ff_k=1, att_k=1,
-    max_loops=2
+    max_loops=5
 )
 
 class AdaptiveMoEUT(nn.Module):

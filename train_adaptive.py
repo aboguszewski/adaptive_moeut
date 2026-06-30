@@ -48,7 +48,7 @@ class TrainConfig:
 
     # --- hardware ---
     device: str = "cuda"
-    mixed_precision: bool = True
+    mixed_precision: bool = False
 
 
 # Quick config for sanity checks: 200 steps, tiny batches, frequent logging.
@@ -72,14 +72,14 @@ MICRO_TRAIN_CONFIG = TrainConfig(
     batch_size=1,
     grad_accum_steps=1,
     num_workers=0,
-    max_steps=10,
+    max_steps=100,
     lr=3e-4,
     warmup_steps=20,
     log_every=10,
     eval_every=10,
     save_every=10,
     eval_steps=1,
-    mixed_precision=torch.cuda.is_available(),
+    mixed_precision=False,
 )
 
 
@@ -336,4 +336,4 @@ if __name__ == "__main__":
             resume=args.resume,
         )
 
-    train(build_model(args.debug), cfg)
+    train(build_model(args.debug or args.micro), cfg)
