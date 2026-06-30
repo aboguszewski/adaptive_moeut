@@ -24,11 +24,20 @@ class ACTStatsTracker:
 
     @torch.no_grad()
     def log_to_tensorboard(self, writer, step: int):
+        values = torch.repeat_interleave(
+            torch.arange(self.max_loops, dtype=torch.float32),
+            self.histogram.cpu()
+        )
+
+        writer.add_histogram(
+            "act_depth_distribution",
+            values,
+            global_step=step
+        )
+        
         for i in range(self.max_loops):
             count = self.logit_counts[i].item()
-            
-            writer.add_scalar(f"act_depth/loop_{i}", self.histogram[i].item(), step)
-            
+
             if count > 0:
                 mean = self.logit_sums[i] / count
                 variance = (self.logit_sq_sums[i] / count) - (mean ** 2)
