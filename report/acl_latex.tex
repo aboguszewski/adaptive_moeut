@@ -11,9 +11,15 @@
 
 \usepackage[utf8]{inputenc}
 \usepackage{microtype}
-\usepackage{inconsolata}
+% \usepackage{inconsolata}  % needs texlive-fonts-extra (not installed); default tt font used
 \usepackage{graphicx}
 \usepackage{subcaption}
+
+% For the baseline section: pro tables (\toprule etc.), \text{} in math mode,
+% and a clearly-marked red placeholder for the pending cluster numbers.
+\usepackage{booktabs}
+\usepackage{amsmath}
+\newcommand{\tbd}{\textcolor{red}{\textbf{TBD}}}
 
 \usepackage{tikz}
 \usetikzlibrary{positioning, fit, backgrounds, arrows.meta}
@@ -103,6 +109,92 @@ In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute
     \caption{UT Architectures}
     \label{fig:ut-designs}
 \end{figure}
+
+\section{Baseline Models}
+
+To establish reference points for the Fully Adaptive MoEUT we train two
+parameter-matched baselines: a standard dense Transformer and a standard MoEUT.
+Both are decoder-only autoregressive language models that share the same
+tokenizer (a SentencePiece BPE vocabulary of $8{,}192$ tokens), the same model
+dimension ($d_{\text{model}}=512$), tied input/output embeddings, rotary
+positional embeddings (RoPE) \citep{rope}, and a maximum context
+length of $2{,}048$ tokens. Tying the embeddings and fixing the vocabulary makes
+the $\sim$33.6M \emph{non-embedding} parameters the only point of difference, so
+any quality or efficiency gap reflects the architecture rather than capacity.
+
+\paragraph{Dense Transformer.} The dense baseline is a standard pre-LN
+decoder-only Transformer \citep{ut} with eight layers.
+Each layer combines causal multi-head self-attention (16 heads
+of dimension 64, i.e.\ a $1{,}024$-dimensional attention inner space) with a
+two-layer ReLU feed-forward network using the standard $4\times$ expansion
+($d_{\text{ff}}=2{,}048$). This model is the backbone of the comparison: following
+\citet{moeut} (\S3), the MoEUT
+configuration is then chosen to match its parameter count.
+
+\paragraph{MoEUT.} The MoEUT baseline replaces the dense stack with a Universal
+Transformer that combines extreme weight sharing with two forms of sparsity.
+Rather than eight unique layers, it uses a group of $G=2$ distinct blocks that
+are applied repeatedly for $R=n_{\text{layers}}/G=4$ iterations, yielding the
+same eight layer applications but only two unique parameter sets. Within each
+block, the feed-forward network is a $\sigma$-MoE \citep{sigmamoe}
+with $N_E=112$ experts of width 128, of which only $K=8$ are activated per token
+(an active hidden width of $8\times128=1{,}024$); the attention is a SwitchHead
+mixture-of-experts \citep{switchhead}
+with four heads of dimension 128, $N_A=3$ value/output experts and $K_A=2$ active
+per head. A small entropy regularizer on the routing distributions
+($0.01$ for the feed-forward experts, $0.001$ for the attention experts)
+stabilizes MoE training. Crucially, although MoEUT is parameter-matched to the
+dense model, only a sparse subset of its experts is active for any given token,
+which is the property the adaptive variant aims to exploit.
+
+\paragraph{Training setup.} Both models are trained from scratch under an
+identical regime on a LAMBADA-decontaminated subset of the Colossal Clean
+Crawled Corpus (C4) \citep{c4}; contamination is removed by dropping any C4
+document that shares a $13$-gram with a LAMBADA passage. We optimize the
+cross-entropy language-modeling loss with AdamW ($\beta=(0.9,0.95)$, weight decay
+$0.1$) at a peak learning rate of $3\times10^{-4}$ with a $1{,}000$-step warmup
+and cosine decay, gradient clipping at $1.0$, for $100{,}000$ steps of
+$32\times512=16{,}384$ tokens ($\approx 1.6$B tokens total). For MoEUT the
+entropy regularization term is added to the loss. All runs are carried out in
+\texttt{fp32}.
+
+\section{Baseline Evaluation}
+
+We evaluate both baselines zero-shot on two standard benchmarks. On LAMBADA
+\citep{lambada} we report last-word \emph{accuracy} (the model must
+greedily predict every token of the final word) and target-token
+\emph{perplexity}. On HellaSwag \citep{hellaswag} we report
+\emph{accuracy} under the length-normalized scoring rule, selecting the candidate
+ending with the lowest mean per-token cross-entropy. To compare efficiency we
+also benchmark steady-state inference, reporting per-forward latency and
+throughput; both models are timed on the same GPU at the same precision
+(\texttt{fp32}) with discarded warmup iterations and CUDA synchronization, so the
+wall-clock gap reflects kernel efficiency rather than a difference in nominal
+FLOPs. Results are summarized in Table~\ref{tab:baselines}.
+
+\begin{table*}[t]
+  \centering
+  \small
+  \begin{tabular}{lcccccc}
+    \toprule
+    & \textbf{Params} & \multicolumn{2}{c}{\textbf{LAMBADA}} & \textbf{HellaSwag}
+    & \textbf{Latency} & \textbf{Throughput} \\
+    \cmidrule(lr){3-4}
+    \textbf{Model} & (non-emb.) & Acc.\ $\uparrow$ & Ppl.\ $\downarrow$
+    & Acc.\ $\uparrow$ & ms/fwd $\downarrow$ & tok/s $\uparrow$ \\
+    \midrule
+    Dense Transformer & 33.6M & \tbd & \tbd & \tbd & \tbd & \tbd \\
+    MoEUT             & 33.7M & \tbd & \tbd & \tbd & \tbd & \tbd \\
+    \midrule
+    Fully Adaptive MoEUT (ours) & 33.7M & \tbd & \tbd & \tbd & \tbd & \tbd \\
+    \bottomrule
+  \end{tabular}
+  \caption{Zero-shot evaluation and inference efficiency of the parameter-matched
+  baselines. Both baselines are trained for $100{,}000$ steps on decontaminated
+  C4 and evaluated with a maximum context of $2{,}048$ tokens; latency and
+  throughput are measured in \texttt{fp32} at batch $8\times512$ tokens. }
+  \label{tab:baselines}
+\end{table*}
 
 \section{Model Architecture}
 
