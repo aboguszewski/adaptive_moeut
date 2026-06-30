@@ -178,11 +178,22 @@ class SwitchHeadCore(torch.nn.Module):
                 if active_mask is not None and active_mask.any():
                     b_mask = active_mask.view(B, 1, T_curr, 1)
                     
-                    curr_k = kv_cache["k"][..., -T_curr:, :]
-                    curr_v = kv_cache["v"][..., -T_curr:, :]
-
-                    kv_cache["k"][..., -T_curr:, :] = torch.where(b_mask, k, curr_k)
-                    kv_cache["v"][..., -T_curr:, :] = torch.where(b_mask, v, curr_v)
+                    if kv_cache["k"].shape[-2] == T_curr:
+                        kv_cache["k"] = torch.where(b_mask, k, kv_cache["k"])
+                        kv_cache["v"] = torch.where(b_mask, v, kv_cache["v"])
+                    
+                    else:
+                        curr_k = kv_cache["k"][..., -T_curr:, :]
+                        curr_v = kv_cache["v"][..., -T_curr:, :]
+                        
+                        updated_k = torch.where(b_mask, k, curr_k)
+                        updated_v = torch.where(b_mask, v, curr_v)
+                        
+                        past_k = kv_cache["k"][..., :-T_curr, :]
+                        past_v = kv_cache["v"][..., :-T_curr, :]
+                        
+                        kv_cache["k"] = torch.cat([past_k, updated_k], dim=-2)
+                        kv_cache["v"] = torch.cat([past_v, updated_v], dim=-2)
 
             k_att = kv_cache["k"]
             v_att = kv_cache["v"]
