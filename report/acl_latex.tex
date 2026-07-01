@@ -36,7 +36,13 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-    TODO
+Universal Transformers (UTs) provide a parameter-efficient alternative to deep networks through recursive weight sharing, and recent extensions like the Mixture-of-Experts Universal Transformer (MoEUT) successfully inject sparsity to scale these models.
+However, standard MoEUTs still apply uniform computational depth across all sequence positions.
+In this work, we propose the Adaptive MoEUT, which integrates an Adaptive Computation Time (ACT) mechanism via a learned Halting Head to dynamically allocate recursive loop iterations on a per-token basis.
+We train parameter-matched dense, standard MoEUT, and Adaptive MoEUT baselines on the C4 dataset and evaluate them zero-shot on LAMBADA and HellaSwag.
+While the architecture theoretically offers significant inference efficiency, our empirical results demonstrate a catastrophic model collapse during training.
+The network overwhelmingly defaulted to a single loop iteration for all tokens, resulting in a severe accuracy degradation on LAMBADA (from 18.8 to 5.6) alongside heavily inflated token throughput.
+We analyze the root causes of this halting collapse - primarily the static auxiliary ACT loss term and sub-optimal variable-shape tensor computations, and outline necessary future work for dynamically balancing ponder penalties.
 \end{abstract}
 
 \section{Introduction}
@@ -546,9 +552,13 @@ expects to decrease, by spending fewer layer applications on tokens that do not 
 
 \subsection{Adaptive MoEUT}
 We experienced a catastrophic decrease in accuracy on the LAMBADA dataset.
+The accuracy plummeted to 5.6, a severe regression from the 18.8 achieved by the standard MoEUT baseline.
+Similarly, the target-token perplexity degraded significantly, surging from 12.53 to 37.45.
+In contrast, the performance on the HellaSwag benchmark showed essentially no difference; the Fully Adaptive MoEUT scored 25.9, which remains within the margin of the $25\%$ random guessing threshold and is virtually identical to the 26.7 and 26.9 achieved by the baselines.
 
-Based on the statistics collected during training we can confidently conclude that the model collapsed to a single loop for all tokens.
-
+Based on the statistics collected during training, we noticed that the model pretty much immediately collapsed to output a halting probability of 1 at every loop depth.
+Because the halting threshold was reached instantly, the network failed to utilize its recursive depth, effectively reducing itself to a single-layer computation for nearly all tokens.
+This collapse perfectly explains both the dramatic performance degeneration on LAMBADA and the notable increase in token throughput (reaching 114,772 tok/s compared to the baseline's 98,472 tok/s), as the model was simply bypassing the intended computational blocks.
 
 \begin{table*}[t]
   \centering
@@ -576,25 +586,23 @@ Based on the statistics collected during training we can confidently conclude th
 
 \section{Conclusions}
 \begin{enumerate}
-    \item We observed that introducing an ACT mechanism into a UT with a naive extra term in the loss caused model collapse.
-    Perhaps additional search for an optimal weight, for the ACT loss would provide better results, however it was not possible in our compute-constrained setting.
-
-    \item We observed that theoretical FLOP savings do not necessarily correlate with wall time reduction or increase in token throughput.
-    We suspect that the main issue was that we introduced tensor slicing into the computations,
-    which resulted in large number of memory operations and irregularly sized tensors not optimal for GPU hardware.
-
-    \item We suspect that training the model for longer might result in better scores as the training objective for Adaptive MoEUT was significantly harder.
-    Instead of only optimizing for language modeling it also had to balance the ACT constraint.
+    \item Integrating an ACT mechanism into a Universal Transformer using a static auxiliary loss term led to model collapse.
+    While a systematic hyperparameter search for the optimal ACT loss weight might mitigate this issue, such an exploration was precluded by computational constraints in this study.
+    
+    \item Theoretical reductions in FLOPs do not strictly translate to proportional improvements in wall-clock latency or token throughput.
+    This discrepancy is likely attributable to the tensor slicing operations required by the adaptive mechanism, which introduced a high volume of memory access operations and yielded irregularly sized tensors that are suboptimal for standard GPU acceleration.
+    
+    \item Extended training durations may yield improved performance, given the increased complexity of the Adaptive MoEUT training objective.
+    The network is required to balance the primary language modeling task with the auxiliary ACT regularization, a dual objective that inherently necessitates a longer convergence period.
 \end{enumerate}
 
 \section{Further Work}
 \begin{enumerate}
-    \item Finding an appropriate way to balance the ACT loss term throughout the training.
-    Some of the options are dynamic weighting of the ponder penalty to be lower in the beginning and slowly increasing as the model explores different recursion depths.
+\item Investigating dynamic scheduling strategies for the ACT loss term. For instance, applying a progressive weighting scheme to the ponder penalty—initializing with a negligible weight and gradually increasing it—could encourage the model to explore deeper recursion levels before heavily penalizing computation time.
 
-    \item Testing how larger $max_loops$ parameter influences the training.
-    
-    \item Optimizing the kernels for variable shape tensor computations.
+\item Evaluating the empirical impact of an expanded $max\_loops$ boundary on model convergence and overall task performance.
+
+\item Developing and integrating hardware-optimized custom kernels designed specifically for variable-shape tensor computations, aiming to align empirical throughput gains with theoretical efficiency.
 \end{enumerate}
 
 \bibliography{references}        
