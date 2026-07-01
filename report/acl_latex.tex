@@ -539,7 +539,7 @@ dense model on LAMBADA accuracy ($18.8$ vs.\ $18.2$) though achieves higher
 perplexity ($12.53$ vs.\ $11.92$), and both sit close to the $25\%$ random
 baseline on HellaSwag, as expected at this parameter scale. The main
 difference is efficiency: despite being parameter- and FLOP-matched, MoEUT is
-$1.10\times$ slower per forward pass ($42.7$ vs.\ $38.7$~ms) because its
+$1.05\times$ slower per forward pass ($41.6$ vs.\ $39.6$~ms) because its
 \texttt{cvmm} expert kernels are less hardware-efficient than the dense model's
 matmuls. This inference-time overhead is precisely what our \emph{fully adaptive} model
 expects to decrease, by spending fewer layer applications on tokens that do not need them.
@@ -561,14 +561,14 @@ Based on the statistics collected during training we can confidently conclude th
     \textbf{Model} & (non-emb.) & Acc.\ $\uparrow$ & Ppl.\ $\downarrow$
     & Acc.\ $\uparrow$ & ms/fwd $\downarrow$ & tok/s $\uparrow$ \\
     \midrule
-    Dense Transformer & 33.6M & 18.2 & 11.92 & 26.7 & 38.7 & 105{,}725 \\
-    MoEUT             & 33.7M & 18.8 & 12.53 & 26.9 & 42.7 & 95{,}988 \\
+    Dense Transformer & 33.6M & 18.2 & 11.92 & 26.7 & 39.6 & 103{,}492 \\
+    MoEUT             & 33.7M & 18.8 & 12.53 & 26.9 & 41.6 & 98{,}472 \\
     \midrule
-    Fully Adaptive MoEUT (ours) & 33.7M & \tbd & \tbd & \tbd & \tbd & \tbd \\
+    Fully Adaptive MoEUT (ours) & 33.7M & 5.6 & 37.45 & 25.9 & \textbf{35.7} & \textbf{114{,}772} \\
     \bottomrule
   \end{tabular}
   \caption{Zero-shot evaluation and inference efficiency of the parameter-matched
-  baselines. Both baselines are trained for $100{,}000$ steps on decontaminated
+  models. All models are trained for $100{,}000$ steps on decontaminated
   C4 and evaluated with a maximum context of $2{,}048$ tokens; latency and
   throughput are measured in \texttt{fp32} at batch $8\times512$ tokens. }
   \label{tab:baselines}
