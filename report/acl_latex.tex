@@ -14,6 +14,8 @@
 % \usepackage{inconsolata}  % needs texlive-fonts-extra (not installed); default tt font used
 \usepackage{graphicx}
 \usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
 
 % For the baseline section: pro tables (\toprule etc.), \text{} in math mode,
 % and a clearly-marked red placeholder for the pending cluster numbers.
@@ -42,7 +44,7 @@
 
 \section{Introduction}
 \textit{Universal Transformers} (UTs) are not a new idea \cite{ut}.
-They are a variation of the \textit{Vanilla Transformer} (VT) \cite{transformer} architecture that achieves network depth not via stacking multiple transformer blocks, but rather reusing the same blocks in a loop.
+They are a variation of the transformer \cite{transformer} architecture that achieves network depth not via stacking multiple transformer blocks, but rather reusing the same blocks in a loop.
 They are the spiritual ancestor of \textit{Recurrent Neural Networks} (RNNs) in the transformer paradigm and are usually designed either as pure cycles or cycles with additional initial and final layers (see Figure~\ref{fig:ut-designs}).
 
 Proponents of this architecture argue that they generalize better - that the built-in recursion allows the models to decompose structured problems, and generalize to longer sequences \cite{moeut}.
@@ -53,7 +55,7 @@ This results in a larger parameter count that is arbitrarily scalable, while fix
 
 \textit{Mixture-of-Experts Universal Transformer} (MoEUT) \cite{moeut} is a UT architecture that injects sparsity to both the attention computation via \textit{SwitchHead} \cite{switchhead}, and the feedforward layer via $\sigma$-MoE.
 
-In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute Time} (ACT) by using the Stick-breaking Halting algorithm proposed in the \textit{Sparse Universal Transformer} \cite{sut}.
+In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute Time} (ACT) by using the Stick-breaking Halting algorithm proposed in the \textit{Sparse Universal Transformer} (SUT) \cite{sut}.
 
 \begin{figure}[htbp]
     \centering
@@ -63,7 +65,8 @@ In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute
             module/.style={draw, very thick, rounded corners, minimum width=15ex},
             ubmodule/.style={module, fill=gray!20},
             arrow/.style={-stealth, thick}, 
-            corner loop/.style={-stealth, thick, line cap=round}
+            corner loop/.style={-stealth, thick, line cap=round},
+            scale=0.75, transform shape
         ]
             \node (in) {Input};
             \node [above=0.5cm of in, ubmodule, align=center] (ub) {Universal Block};
@@ -87,7 +90,8 @@ In this work we attempt to extend the MoEUT design with \textit{Adaptive Compute
             emodule/.style={module, fill=gray!20},
             ubmodule/.style={module, fill=gray!20},
             arrow/.style={-stealth, thick}, 
-            corner loop/.style={-stealth, thick, line cap=round}
+            corner loop/.style={-stealth, thick, line cap=round},
+            scale=0.75, transform shape
         ]
             \node (in) {Input};
             \node [above=0.5cm of in, pmodule, align=center] (p) {Prolog};
@@ -196,13 +200,184 @@ FLOPs. Results are summarized in Table~\ref{tab:baselines}.
   \label{tab:baselines}
 \end{table*}
 
-\section{Model Architecture}
+\section{Adaptive MoEUT Architecture}
 
-\subsection{Overview}
-TODO
+\paragraph{General idea.}
+Our architecture (see Figure~\ref{fig:adaptive-moeut}) incorporates ACT inspired by the SUT.
+The mechanism maintains two separate token streams throughout the recursive computation: $h$ (the active hidden state) and $s$ (the expected state of the embedding).
+At each loop iteration, a halting probability is calculated for every active token.
+As tokens progress through the layers, they accumulate this probability.
+Once a token's cumulative probability crosses a predefined threshold it is halted.
+When halted, a token stops being actively processed through the main transformer blocks (it is dropped from the active mask to save compute and is no longer used as a query).
+However, its expected state $s$ is preserved and continues to be passed as a key and value, allowing the remaining active tokens to attend to it.
+This ensures that context is maintained across sequence positions without wasting FLOPs on already-resolved tokens.
 
-\subsection{Transformer Block}
-TODO
+\paragraph{Halting Head.}
+The halting probability for each active token is determined by a dedicated Halting Head.
+This is a lightweight module consisting of a single linear layer followed by a Sigmoid activation, which takes the active hidden state $h$ as input.
+To encourage the model to leverage the full depth of the recursive blocks early in training, the Halting Head's weights are initialized to zeros and its bias to a negative value (e.g., $-3$).
+This deep-start initialization forces the initial halting probabilities to be small (for a $-3$ bias it's $\approx5\%$), ensuring that the model explores deeper loops before it learns to efficiently halt and optimize its compute time.
+
+\paragraph{Update algorithm.}
+The update mechanism manages the dynamic computation by calculating the incremental halting probabilities ($\alpha$) from the Halting Head outputs ($\hat{\alpha}$), and subsequently updating the expected states ($s$) and the active mask.
+Because the model utilizes soft-halting, the final representation is a probability-weighted combination of the states across the layers a token traversed.
+To maximize inference efficiency, the algorithm is vectorized and relies on a boolean mask $M$ to compute updates strictly for the active tokens.
+The process is defined in Algorithm~\ref{alg:adaptive_halting}.
+
+\begin{figure}
+\begin{tikzpicture}[
+    module/.style={draw, thick, darkgray, minimum height=0.9cm, align=center, rounded corners},
+    tf/.style={module, fill=blue!20, minimum width=3.4cm},
+    halt/.style={module, fill=pink!40, minimum width=2.4cm},
+    update/.style={module, fill=green!20, minimum width=5.0cm},
+    dot/.style={circle, fill=darkgray, inner sep=1.5pt},
+    arrow/.style={-stealth, thick, darkgray},
+    line/.style={thick, darkgray},
+    dashed box/.style={draw, thick, darkgray, dashed, rounded corners=5pt},
+    rounded corners=1pt,
+    scale=0.75, transform shape
+]
+
+    % ==========================================
+    % BOUNDARY & LOOP INDICATOR
+    % ==========================================
+    % Dotted Box enclosing the loop
+    \draw[dashed box] (-4.0, 0.3) rectangle (5.0, 10.2);
+
+    % Looped arrow and label in the top right corner
+    \draw[-stealth, thick, darkgray] (4.8, 10.4) arc (150:-150:0.4cm) node[midway, right=1pt] {$N_{\text{loops}}$};
+
+
+    % ==========================================
+    % INPUTS
+    % ==========================================
+    \node (h_in) at (0, -0.5) {$h$};
+    \node (s_in) at (3, -0.5) {$s$};
+
+
+    % ==========================================
+    % NODES
+    % ==========================================
+    \node[tf] (tb1) at (0, 2.5) {MoEUT Block};
+    \node[tf] (tb2) at (0, 4.5) {MoEUT Block};
+    \node[halt] (halting) at (-2.2, 6.5) {Halting Head};
+    \node[update] (upd) at (1.5, 8.5) {Update};
+
+
+    % ==========================================
+    % MAIN H STREAM (Left Spine)
+    % ==========================================
+    % Input merge
+    \draw[line] (h_in) -- (0, 0.8);
+    \node[dot] (h_merge) at (0, 0.8) {};
+    
+    % Through Transformers
+    \draw[arrow] (0, 0.8) -- (tb1.south);
+    \draw[arrow] (tb1.north) -- (tb2.south);
+    
+    % Out of Transformers
+    \draw[line] (tb2.north) -- (0, 5.5);
+    \node[dot] (h_split) at (0, 5.5) {};
+
+    % Split 1: To Halting Head
+    \draw[line] (0, 5.5) -- (-2.2, 5.5);
+    \draw[arrow] (-2.2, 5.5) -- (halting.south);
+
+    % Split 2: Straight to Update Block
+    \draw[arrow] (0, 5.5) -- (upd.south -| 0,0);
+
+
+    % ==========================================
+    % MAIN S STREAM (Right Spine)
+    % ==========================================
+    % Input merge
+    \draw[line] (s_in) -- (3, 0.8);
+    \node[dot] (s_merge) at (3, 0.8) {};
+    \draw[line] (3, 0.8) -- (3, 2.5);
+    
+    % Feed into TB1 (without modifying stream)
+    \node[dot] (s_tb1) at (3, 2.5) {};
+    \draw[arrow] (3, 2.5) -- (tb1.east);
+
+    % Feed into TB2 (without modifying stream)
+    \draw[line] (3, 2.5) -- (3, 4.5);
+    \node[dot] (s_tb2) at (3, 4.5) {};
+    \draw[arrow] (3, 4.5) -- (tb2.east);
+
+    % Straight to Update Block
+    \draw[arrow] (3, 4.5) -- (upd.south -| 3,0);
+
+
+    % ==========================================
+    % ALPHA HAT STREAM
+    % ==========================================
+    \draw[arrow] (halting.north) |- (upd.west) node[pos=0.75, above] {$\hat{\alpha}$};
+
+
+    % ==========================================
+    % LOOPBACK ROUTING (New h and s) & FINAL OUTPUT
+    % ==========================================
+    % Loopback h (routes around the left side)
+    \draw[arrow, rounded corners] (upd.north -| 0,0) 
+        -- (0, 9.6) 
+        -- (-3.5, 9.6) node[midway, above] {$h'$} 
+        -- (-3.5, 0.8) 
+        -- (0, 0.8);
+
+    % Loopback s (routes around the right side)
+    \draw[line] (upd.north -| 3,0) -- (3, 9.6);
+    \node[dot] (s_out_split) at (3, 9.6) {};
+    
+    % The loopback path for s
+    \draw[arrow, rounded corners] (3, 9.6) 
+        -- (4.4, 9.6) node[midway, above] {$s'$} 
+        -- (4.4, 0.8) 
+        -- (3, 0.8);
+
+    % The final output path breaking out of the loop
+    \draw[arrow] (3, 9.6) -- (3, 11.2) node[above] {final $s$};
+
+\end{tikzpicture}
+\caption{Adaptive MoEUT}
+\label{fig:adaptive-moeut}
+\end{figure}
+
+\begin{algorithm}[htbp]
+\small
+\caption{Adaptive Halting and State Update Mechanism}
+\label{alg:adaptive_halting}
+\begin{algorithmic}[1]
+    \Require Initial hidden state $h$, max loops $L$, threshold $\tau$
+    
+    \State $s \gets h$
+    \State $P \gets \mathbf{0}$ \Comment{Accumulated probability}
+    \State $W \gets \mathbf{0}$ \Comment{Weighted previous states}
+    \State $M \gets \mathbf{1}$ \Comment{Boolean active mask}
+    
+    \For{$l = 1$ \textbf{to} $L$}
+        \If{\textbf{not} $\text{any}(M)$}
+            \State \textbf{break}
+        \EndIf
+        
+        \State $h[M] \gets \text{MoEUT\_Block}(h[M], s[M])$
+        \State $\hat{\alpha}[M] \gets \text{HaltingHead}(h[M])$
+        \State $\alpha[M] \gets \hat{\alpha}[M] \odot (1 - P[M])$
+        \State $s[M] \gets (1 - P[M]) \odot h[M] + W[M]$
+        \State $P[M] \gets P[M] + \alpha[M]$
+        \State $W[M] \gets W[M] + \alpha[M] \odot h[M]$
+        \State $M \gets P < \tau$
+    \EndFor
+    
+    \If{$\text{any}(M)$}
+        \State $R[M] \gets 1 - P[M]$ \Comment{Remainder for tokens reaching max depth}
+        \State $s[M] \gets R[M] \odot h[M] + W[M]$
+    \EndIf
+    
+    \State \Return $s$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{MoEUT Block.}
 
 \begin{figure}
 \begin{tikzpicture}[
@@ -315,51 +490,14 @@ TODO
     \end{scope}
 
 \end{tikzpicture}
-\caption{Transformer Block}
-\label{fig:transformer-block}
+\caption{MoEUT Block. The original design was modified to account for the $s$ that are attended to.
+They have their own LayerNorm and are passed as keys and values to the SwitchHead layer (instead of doing self-attention like in the original MoEUT).}
+\label{fig:moeut-block}
 \end{figure}
 
-\section{Experiments}
-
-\subsection{Training}
-
-\subsection{Evaluation}
-
-\subsection{Adaptive Compute Time}
-
-\section{Closing Remarks}
+\section{Conclusions}
 
 \section{Further Work}
-
-% \section{Motivation and Context}
-
-% Mixture-of-Experts Universal Transformer (MoEUT) \citep{moeut}  is an improvement of the Universal Transformer (UT) \citep{ut} architecture. The idea behind UT is to introduce extreme weight sharing into the traditional transformer by repeatedly processing tokens with a single transformer block instead of having multiple single-use blocks. MoEUT tries to improve the efficiency of a basic UT, by introducing Mixture-of-Experts in the feedforward networks \citep{moe} as well as the multihead attention mechanism \citep{switchhead}.
-
-
-% We want to introduce Adaptive Compute Time (ACT) into the MoEUT architecture both at the token and loop level. MoEUT, as presented in the original paper, has a fixed number of loops where every loop processes every token. Every query gets the same amount of compute. The idea of ACT is that different queries require different amounts of compute e.g. we could get away with allocating less compute to easy queries and utilizing those savings for more difficult queries.
-
-
-% In the case of UTs, ACT could mean adjusting the number of loops that the query goes through before producing an answer. This idea is explored in the LoopFormer and Sparse Universal Transformer \citep{sut} papers. This is what we refer to as loop level ACT. Another approach would be to adjust the amount of tokens that are processed in each loop. This idea is explored in the Mixture-of-Recursions \citep{mor} paper and we refer to it as token level ACT.
-
-
-% As far as we know the two approaches were never combined - papers mentioned above either fixed the number of loops and adjusted the number of tokens processed (token-level ACT) or fixed the number of tokens processed and adjusted the number of loops (loop-level ACT). We would like to see if implementing both of them within a MoEUT would result in compute savings without sacrificing the  quality of the model.
-
-
-% \section{Action Plan}
-
-% \begin{enumerate}
-%     \item Choose two model parameter sizes (e.g. 244M, 728M), training dataset and training compute budget.
-%     \item Train baseline models - standard dense transformer, standard MoEUT.
-%     \item Choose the evaluation dataset and metrics (e.g. loss, perplexity, accuracy and FLOPs or MACs spent on inference).
-%     \item Evaluate baseline models.
-%     \item Design the Fully Adaptive MoEUT architecture that combines token-level and loop-level ACT.
-%     \item Train and evaluate the Fully Adaptive MoEUT model.
-%     \item Compare the models and report findings.
-% \end{enumerate}
-
-% \section{Datasets and Benchmarks}
-
-% As a training dataset we plan on using the Colossal Clean Crawled Corpus (C4), as it is one of the three datasets utilized in the original MoEUT paper. The quality of our Fully Adaptive MoEUT will be evaluated using several metrics. We plan on testing its zero-shot performance on the LAMBADA dataset and possibly further on HellaSwag and ARC. We will also measure cross-entropy loss and perplexity, as well as check if our model can match performance baselines while using fewer MACs/FLOPs.
 
 \bibliography{references}        
 
