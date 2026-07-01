@@ -206,9 +206,9 @@ FLOPs. Results are summarized in Table~\ref{tab:baselines}.
 Our architecture (see Figure~\ref{fig:adaptive-moeut}) incorporates ACT inspired by the SUT.
 The mechanism maintains two separate token streams throughout the recursive computation: $h$ (the active hidden state) and $s$ (the expected state of the embedding).
 At each loop iteration, a halting probability is calculated for every active token.
-As tokens progress through the layers, they accumulate this probability.
+Each token accumulates this probability between loops.
 Once a token's cumulative probability crosses a predefined threshold it is halted.
-When halted, a token stops being actively processed through the main transformer blocks (it is dropped from the active mask to save compute and is no longer used as a query).
+When halted, a token stops being actively processed through the transformer blocks (it is dropped from the active mask to save compute and is no longer used as a query).
 However, its expected state $s$ is preserved and continues to be passed as a key and value, allowing the remaining active tokens to attend to it.
 This ensures that context is maintained across sequence positions without wasting FLOPs on already-resolved tokens.
 
@@ -223,6 +223,7 @@ The update mechanism manages the dynamic computation by calculating the incremen
 Because the model utilizes soft-halting, the final representation is a probability-weighted combination of the states across the layers a token traversed.
 To maximize inference efficiency, the algorithm is vectorized and relies on a boolean mask $M$ to compute updates strictly for the active tokens.
 The process is defined in Algorithm~\ref{alg:adaptive_halting}.
+An additional, expected loop depth (per token) penalty is added to the loss, to encourage skipping computations.
 
 \begin{figure}
 \begin{tikzpicture}[
@@ -354,11 +355,7 @@ The process is defined in Algorithm~\ref{alg:adaptive_halting}.
     \State $W \gets \mathbf{0}$ \Comment{Weighted previous states}
     \State $M \gets \mathbf{1}$ \Comment{Boolean active mask}
     
-    \For{$l = 1$ \textbf{to} $L$}
-        \If{\textbf{not} $\text{any}(M)$}
-            \State \textbf{break}
-        \EndIf
-        
+    \For{$l = 1$ \textbf{to} $L$}        
         \State $h[M] \gets \text{MoEUT\_Block}(h[M], s[M])$
         \State $\hat{\alpha}[M] \gets \text{HaltingHead}(h[M])$
         \State $\alpha[M] \gets \hat{\alpha}[M] \odot (1 - P[M])$
@@ -366,6 +363,10 @@ The process is defined in Algorithm~\ref{alg:adaptive_halting}.
         \State $P[M] \gets P[M] + \alpha[M]$
         \State $W[M] \gets W[M] + \alpha[M] \odot h[M]$
         \State $M \gets P < \tau$
+
+        \If{\textbf{not} $\text{any}(M)$}
+            \State \textbf{break}
+        \EndIf
     \EndFor
     
     \If{$\text{any}(M)$}
@@ -377,8 +378,12 @@ The process is defined in Algorithm~\ref{alg:adaptive_halting}.
 \end{algorithmic}
 \end{algorithm}
 
-\paragraph{MoEUT Block.}
-
+\paragraph{KV caching.}
+To support efficient autoregressive generation alongside the adaptive compute mechanism, a specialized caching strategy is used.
+Instead of maintaining independent caches for each potential loop depth, the cache is shared across all loop iterations.
+Throughout the dynamic computation, the cache continuously updates to store only the last processed state of every token.
+Once a token halts, its final computed state persists in this shared cache, allowing active tokens to efficiently attend to it during subsequent generation steps.
+This strategy attempts to unlock arbitrarily deep recursion with a constant size cache.
 \begin{figure}
 \begin{tikzpicture}[
     module/.style={draw, thick, darkgray, minimum height=0.9cm, align=center, rounded corners},
