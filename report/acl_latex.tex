@@ -413,7 +413,7 @@ They have their own LayerNorm and are passed as keys and values to the SwitchHea
 
 \section{Experiments}
 
-\subsection{Baselines}
+\subsection{Baseline Architecture}
 To establish reference points for the Adaptive MoEUT, we train two parameter-matched baselines: a standard dense Transformer and a standard MoEUT.
 Both are decoder-only autoregressive language models sharing the same foundational configuration to ensure any quality or efficiency gaps reflect the architecture rather than the capacity. 
 See Table~\ref{tab:shared_params}.
@@ -520,6 +520,8 @@ Both models are trained from scratch under an identical regime on a LAMBADA-deco
 \end{table}
 
 \section{Evaluation}
+
+\subsection{Baselines}
 We evaluate both baselines zero-shot on two standard benchmarks. On LAMBADA
 \citep{lambada} we report last-word \emph{accuracy} (the model must
 greedily predict every token of the final word) and target-token
@@ -541,6 +543,12 @@ $1.10\times$ slower per forward pass ($42.7$ vs.\ $38.7$~ms) because its
 \texttt{cvmm} expert kernels are less hardware-efficient than the dense model's
 matmuls. This inference-time overhead is precisely what our \emph{fully adaptive} model
 expects to decrease, by spending fewer layer applications on tokens that do not need them.
+
+\subsection{Adaptive MoEUT}
+We experienced a catastrophic decrease in accuracy on the LAMBADA dataset.
+
+Based on the statistics collected during training we can confidently conclude that the model collapsed to a single loop for all tokens.
+
 
 \begin{table*}[t]
   \centering
@@ -567,8 +575,27 @@ expects to decrease, by spending fewer layer applications on tokens that do not 
 \end{table*}
 
 \section{Conclusions}
+\begin{enumerate}
+    \item We observed that introducing an ACT mechanism into a UT with a naive extra term in the loss caused model collapse.
+    Perhaps additional search for an optimal weight, for the ACT loss would provide better results, however it was not possible in our compute-constrained setting.
+
+    \item We observed that theoretical FLOP savings do not necessarily correlate with wall time reduction or increase in token throughput.
+    We suspect that the main issue was that we introduced tensor slicing into the computations,
+    which resulted in large number of memory operations and irregularly sized tensors not optimal for GPU hardware.
+
+    \item We suspect that training the model for longer might result in better scores as the training objective for Adaptive MoEUT was significantly harder.
+    Instead of only optimizing for language modeling it also had to balance the ACT constraint.
+\end{enumerate}
 
 \section{Further Work}
+\begin{enumerate}
+    \item Finding an appropriate way to balance the ACT loss term throughout the training.
+    Some of the options are dynamic weighting of the ponder penalty to be lower in the beginning and slowly increasing as the model explores different recursion depths.
+
+    \item Testing how larger $max_loops$ parameter influences the training.
+    
+    \item Optimizing the kernels for variable shape tensor computations.
+\end{enumerate}
 
 \bibliography{references}        
 
