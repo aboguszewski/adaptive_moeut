@@ -36,13 +36,7 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-Universal Transformers (UTs) provide a parameter-efficient alternative to deep networks through recursive weight sharing, and recent extensions like the Mixture-of-Experts Universal Transformer (MoEUT) successfully inject sparsity to scale these models.
-However, standard MoEUTs still apply uniform computational depth across all sequence positions.
-In this work, we propose the Adaptive MoEUT, which integrates an Adaptive Computation Time (ACT) mechanism via a learned Halting Head to dynamically allocate recursive loop iterations on a per-token basis.
-We train parameter-matched dense, standard MoEUT, and Adaptive MoEUT baselines on the C4 dataset and evaluate them zero-shot on LAMBADA and HellaSwag.
-While the architecture theoretically offers significant inference efficiency, our empirical results demonstrate a catastrophic model collapse during training.
-The network overwhelmingly defaulted to a single loop iteration for all tokens, resulting in a severe accuracy degradation on LAMBADA (from 18.8 to 5.6) alongside heavily inflated token throughput.
-We analyze the root causes of this halting collapse - primarily the static auxiliary ACT loss term and sub-optimal variable-shape tensor computations, and outline necessary future work for dynamically balancing ponder penalties.
+Universal Transformers augmented with Mixture-of-Experts (MoEUT) efficiently scale parameter counts, but they still apply a rigid, uniform computational depth to all sequence positions. To address this, we introduce the Adaptive MoEUT, which incorporates an Adaptive Computation Time (ACT) mechanism to dynamically adjust recursive loop iterations per token. We trained parameter-matched dense, standard MoEUT, and Adaptive MoEUT baselines on the C4 dataset and evaluated their zero-shot performance on the LAMBADA and HellaSwag benchmarks. While theoretically offering improved inference efficiency, our empirical results revealed a catastrophic model collapse during training, where the network universally defaulted to a single loop iteration. This premature halting caused a severe accuracy drop on LAMBADA, highlighting the need for dynamic weighting of the auxiliary ACT loss and hardware-optimized variable-shape tensor computations.
 \end{abstract}
 
 \section{Introduction}

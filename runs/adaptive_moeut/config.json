@@ -1,0 +1,27 @@
+{
+  "shard_dir": "/home/adi/uni/R3S2/NaturalLanguageProcessing/adaptive_moeut/minimal_c4_test",
+  "tokenizer_path": "tokenizer/c4_bpe8k.model",
+  "output_dir": "runs/adaptive_moeut",
+  "resume": null,
+  "seq_len": 8,
+  "batch_size": 1,
+  "grad_accum_steps": 1,
+  "num_workers": 0,
+  "max_steps": 100,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "betas": [
+    0.9,
+    0.95
+  ],
+  "grad_clip": 1.0,
+  "warmup_steps": 20,
+  "log_every": 10,
+  "eval_every": 10,
+  "save_every": 10,
+  "eval_steps": 1,
+  "spike_threshold": 1.5,
+  "loss_ema_beta": 0.98,
+  "device": "cuda",
+  "mixed_precision": false
+}
