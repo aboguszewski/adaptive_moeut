@@ -1,0 +1,66 @@
+\begin{thebibliography}{8}
+\providecommand{\natexlab}[1]{#1}
+
+\bibitem[{Csordás et~al.(2024{\natexlab{a}})Csordás, Irie, Schmidhuber,
+  Potts, and Manning}]{moeut}
+Róbert Csordás, Kazuki Irie, Jürgen Schmidhuber, Christopher Potts, and
+  Christopher~D. Manning. 2024{\natexlab{a}}.
+\newblock \href {https://arxiv.org/abs/2405.16039} {Moeut: Mixture-of-experts
+  universal transformers}.
+\newblock \emph{Preprint}, arXiv:2405.16039.
+
+\bibitem[{Csordás et~al.(2024{\natexlab{b}})Csordás, Piękos, Irie, and
+  Schmidhuber}]{switchhead}
+Róbert Csordás, Piotr Piękos, Kazuki Irie, and Jürgen Schmidhuber.
+  2024{\natexlab{b}}.
+\newblock \href {https://arxiv.org/abs/2312.07987} {Switchhead: Accelerating
+  transformers with mixture-of-experts attention}.
+\newblock \emph{Preprint}, arXiv:2312.07987.
+
+\bibitem[{Dehghani et~al.(2018)Dehghani, Gouws, Vinyals, Uszkoreit, and
+  Kaiser}]{ut}
+Mostafa Dehghani, Stephan Gouws, Oriol Vinyals, Jakob Uszkoreit, and Lukasz
+  Kaiser. 2018.
+\newblock \href {https://arxiv.org/abs/1807.03819} {Universal transformers}.
+\newblock \emph{CoRR}, abs/1807.03819.
+
+\bibitem[{Paperno et~al.(2016)Paperno, Kruszewski, Lazaridou, Pham, Bernardi,
+  Pezzelle, Baroni, Boleda, and Fernández}]{lambada}
+Denis Paperno, Germán Kruszewski, Angeliki Lazaridou, Quan~Ngoc Pham,
+  Raffaella Bernardi, Sandro Pezzelle, Marco Baroni, Gemma Boleda, and Raquel
+  Fernández. 2016.
+\newblock \href {https://aclanthology.org/P16-1144/} {The {LAMBADA} dataset:
+  Word prediction requiring a broad discourse context}.
+\newblock In \emph{Proceedings of the 54th Annual Meeting of the Association
+  for Computational Linguistics (ACL)}, pages 1525--1534.
+
+\bibitem[{Shazeer et~al.(2017)Shazeer, Mirhoseini, Maziarz, Davis, Le, Hinton,
+  and Dean}]{moe}
+Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy Davis, Quoc~V. Le,
+  Geoffrey~E. Hinton, and Jeff Dean. 2017.
+\newblock \href {https://arxiv.org/abs/1701.06538} {Outrageously large neural
+  networks: The sparsely-gated mixture-of-experts layer}.
+\newblock \emph{CoRR}, abs/1701.06538.
+
+\bibitem[{Tan et~al.(2023)Tan, Shen, Chen, Courville, and Gan}]{sut}
+Shawn Tan, Yikang Shen, Zhenfang Chen, Aaron Courville, and Chuang Gan. 2023.
+\newblock \href {https://arxiv.org/abs/2310.07096} {Sparse universal
+  transformer}.
+\newblock \emph{Preprint}, arXiv:2310.07096.
+
+\bibitem[{Vaswani et~al.(2023)Vaswani, Shazeer, Parmar, Uszkoreit, Jones,
+  Gomez, Kaiser, and Polosukhin}]{transformer}
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones,
+  Aidan~N. Gomez, Lukasz Kaiser, and Illia Polosukhin. 2023.
+\newblock \href {https://arxiv.org/abs/1706.03762} {Attention is all you need}.
+\newblock \emph{Preprint}, arXiv:1706.03762.
+
+\bibitem[{Zellers et~al.(2019)Zellers, Holtzman, Bisk, Farhadi, and
+  Choi}]{hellaswag}
+Rowan Zellers, Ari Holtzman, Yonatan Bisk, Ali Farhadi, and Yejin Choi. 2019.
+\newblock \href {https://aclanthology.org/P19-1472/} {{HellaSwag}: Can a
+  machine really finish your sentence?}
+\newblock In \emph{Proceedings of the 57th Annual Meeting of the Association
+  for Computational Linguistics (ACL)}, pages 4791--4800.
+
+\end{thebibliography}
